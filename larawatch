@@ -113,6 +113,21 @@ cmd_scan() {
         check_count=$((check_count + 1))
     fi
 
+    if [[ "${CHECK_DISK:-true}" == "true" ]]; then
+        check_disk_run
+        check_count=$((check_count + 1))
+    fi
+
+    if [[ "${CHECK_CPU:-true}" == "true" ]]; then
+        check_cpu_run
+        check_count=$((check_count + 1))
+    fi
+
+    if [[ "${CHECK_MEMORY:-true}" == "true" ]]; then
+        check_memory_run
+        check_count=$((check_count + 1))
+    fi
+
     # Results
     local total critical_count warning_count info_count
     total=$(findings_count)
@@ -458,6 +473,9 @@ cmd_status() {
         "Users|CHECK_USERS"
         "Nginx Config|CHECK_NGINX"
         "Log Anomalies|CHECK_LOG_ANOMALIES"
+        "Disk Usage|CHECK_DISK"
+        "CPU Usage|CHECK_CPU"
+        "Memory Usage|CHECK_MEMORY"
     )
 
     for entry in "${checks[@]}"; do
@@ -778,6 +796,9 @@ _update_all_baselines() {
     [[ "${CHECK_LOG_ANOMALIES:-true}" == "true" ]] && check_log_anomalies_update
     check_processes_update
     check_service_exposure_update
+    check_disk_update
+    check_cpu_update
+    check_memory_update
 }
 
 _update_site_baselines() {
@@ -862,9 +883,12 @@ _update_check() {
         users)        check_users_update ;;
         nginx)        check_nginx_update ;;
         log_anomalies) check_log_anomalies_update ;;
+        disk)         check_disk_update ;;
+        cpu)          check_cpu_update ;;
+        memory)       check_memory_update ;;
         *)
             out_error "Unknown check: ${check}"
-            out_info "Available: php_integrity, env_integrity, webshell, ssh_keys, cron, ports, processes, service_exposure, users, nginx, log_anomalies"
+            out_info "Available: php_integrity, env_integrity, webshell, ssh_keys, cron, ports, processes, service_exposure, users, nginx, log_anomalies, disk, cpu, memory"
             return 1 ;;
     esac
 }

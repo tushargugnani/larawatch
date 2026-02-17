@@ -38,6 +38,9 @@ CHECK_SERVICE_EXPOSURE="true"   # Redis/Memcached/MySQL on 0.0.0.0
 CHECK_USERS="true"              # New users, sudo changes
 CHECK_NGINX="true"              # Nginx config changes
 CHECK_LOG_ANOMALIES="true"      # .env probes, error rate spikes
+CHECK_DISK="true"               # Disk usage thresholds
+CHECK_CPU="true"                # CPU usage thresholds
+CHECK_MEMORY="true"             # Memory usage thresholds
 
 # ============================================================
 # Notifications - Telegram
@@ -84,3 +87,19 @@ ENV_PROBE_THRESHOLD=5
 
 # 5xx error rate percentage to trigger WARNING
 ERROR_RATE_THRESHOLD=10
+
+# ============================================================
+# Resource Monitoring Thresholds
+# ============================================================
+
+# Disk usage percentage thresholds
+DISK_WARN_THRESHOLD=80
+DISK_CRITICAL_THRESHOLD=90
+
+# CPU usage percentage thresholds
+CPU_WARN_THRESHOLD=90
+CPU_CRITICAL_THRESHOLD=95
+
+# Memory usage percentage thresholds
+MEMORY_WARN_THRESHOLD=80
+MEMORY_CRITICAL_THRESHOLD=90
