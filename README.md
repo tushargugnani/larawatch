@@ -44,7 +44,7 @@ larawatch test   # verify it works
 | Cron Jobs | System | CRITICAL (new entry) |
 | Listening Ports | System | CRITICAL (new port) |
 | Suspicious Processes | System | CRITICAL (miners, reverse shells) |
-| Service Exposure | System | CRITICAL (Redis/Memcached on 0.0.0.0) |
+| Service Exposure | System | WARNING (Redis/Memcached/MySQL on 0.0.0.0) |
 | User Accounts | System | CRITICAL (new user/sudo member) |
 | Nginx Config | System | WARNING (modified) |
 | Log Anomalies | System | WARNING (.env probes, 5xx spikes) |
@@ -154,7 +154,7 @@ SCAN_DIRS="/home"           # Directories to scan
 SCAN_DEPTH=4                # Max depth
 CHECK_PHP_INTEGRITY="true"  # Toggle individual checks
 NOTIFY_COOLDOWN=3600        # Alert dedup window (seconds)
-NOTIFY_MIN_SEVERITY="WARNING"  # CRITICAL, WARNING, or INFO
+NOTIFY_MIN_SEVERITY="CRITICAL" # CRITICAL, WARNING, or INFO
 ```
 
 ## Requirements

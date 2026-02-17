@@ -67,7 +67,7 @@ EMAIL_SMTP_PASS=""
 NOTIFY_COOLDOWN=3600
 
 # Minimum severity to trigger notifications: CRITICAL, WARNING, or INFO
-NOTIFY_MIN_SEVERITY="WARNING"
+NOTIFY_MIN_SEVERITY="CRITICAL"
 
 # ============================================================
 # Log Anomalies Settings

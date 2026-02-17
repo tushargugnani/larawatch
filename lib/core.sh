@@ -132,7 +132,7 @@ notify_dispatch() {
     info_count=$(findings_count "INFO")
 
     # Check minimum severity
-    local min_sev="${NOTIFY_MIN_SEVERITY:-WARNING}"
+    local min_sev="${NOTIFY_MIN_SEVERITY:-CRITICAL}"
     case "$min_sev" in
         CRITICAL)
             [[ "$critical_count" -eq 0 ]] && return 0

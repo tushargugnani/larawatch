@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # LaraWatch Check: Service Exposure
 # Checks if Redis, Memcached, or MySQL are bound to 0.0.0.0 (no baseline needed)
-# Exposed = CRITICAL
+# Redis/Memcached = WARNING (common default), MySQL/PostgreSQL = WARNING
 
 _check_exposed_port() {
     local ss_output="$1" port="$2"
@@ -26,12 +26,12 @@ check_service_exposure_run() {
                 redis_auth="password may be set"
             fi
         fi
-        finding_add "CRITICAL" "service_exposure" "SYSTEM" "Redis bound to 0.0.0.0:6379 (${redis_auth})"
+        finding_add "WARNING" "service_exposure" "SYSTEM" "Redis bound to 0.0.0.0:6379 (${redis_auth})"
     fi
 
     # Memcached (default port 11211)
     if _check_exposed_port "$ss_output" 11211; then
-        finding_add "CRITICAL" "service_exposure" "SYSTEM" "Memcached bound to 0.0.0.0:11211 (no authentication by default)"
+        finding_add "WARNING" "service_exposure" "SYSTEM" "Memcached bound to 0.0.0.0:11211 (no authentication by default)"
     fi
 
     # MySQL (default port 3306)
