@@ -11,8 +11,7 @@ out_header "LaraWatch Uninstaller"
 echo
 
 # Confirm
-printf "This will remove LaraWatch from this system.\n"
-printf "The LaraWatch directory (${SCRIPT_DIR}) will NOT be deleted.\n\n"
+printf "This will remove LaraWatch from this system.\n\n"
 read -rp "Continue? [y/N] " confirm
 if [[ "${confirm,,}" != "y" ]]; then
     out_info "Uninstall cancelled"
@@ -58,7 +57,15 @@ if [[ "${remove_config,,}" == "y" ]]; then
     out_ok "Removed config"
 fi
 
+# Optionally remove entire installation directory
+read -rp "Remove LaraWatch directory (${SCRIPT_DIR})? [y/N] " remove_dir
+if [[ "${remove_dir,,}" == "y" ]]; then
+    # Run from outside the directory before deleting it
+    cd /
+    rm -rf "${SCRIPT_DIR}"
+    out_ok "Removed ${SCRIPT_DIR}"
+fi
+
 echo
 out_ok "LaraWatch uninstalled"
-out_info "To fully remove, delete: ${SCRIPT_DIR}"
 echo
