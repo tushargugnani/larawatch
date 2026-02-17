@@ -13,10 +13,11 @@ bash <(curl -s https://raw.githubusercontent.com/tushargugnani/larawatch/main/in
 Or clone manually:
 
 ```bash
-git clone https://github.com/tushargugnani/larawatch.git ~/.larawatch && ~/.larawatch/install.sh
+git clone https://github.com/tushargugnani/larawatch.git ~/.larawatch
+~/.larawatch/install.sh
 ```
 
-Re-running the installer on an existing install will pull the latest updates and re-initialize.
+Re-running the install command is safe — it updates an existing install automatically.
 
 The installer will:
 1. Auto-discover all Laravel sites on your server

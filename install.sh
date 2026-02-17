@@ -23,6 +23,12 @@ if [[ ! -f "$(dirname "${BASH_SOURCE[0]}")/lib/output.sh" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# If running inside an existing git repo, pull latest first
+if [[ -d "${SCRIPT_DIR}/.git" ]]; then
+    git -C "$SCRIPT_DIR" pull --ff-only 2>/dev/null || true
+fi
+
 source "${SCRIPT_DIR}/lib/output.sh"
 
 LARAWATCH_VERSION="0.1.0"
