@@ -33,12 +33,19 @@ check_tmpdir_run() {
 
     [[ ${#scan_dirs[@]} -eq 0 ]] && return 0
 
+    # Build exclusions for larawatch's own state/install dirs so we don't
+    # flag our own working files (e.g. when installed under /tmp/larawatch/).
+    local exclude_args=()
+    for own_dir in "${LARAWATCH_STATE:-}" "${LARAWATCH_DIR:-}"; do
+        [[ -n "$own_dir" ]] && exclude_args+=(-not -path "${own_dir}/*")
+    done
+
     # --- PHP files in temp dirs (always CRITICAL, no baseline needed) ---
     for scan_dir in "${scan_dirs[@]}"; do
         while IFS= read -r file; do
             [[ -z "$file" ]] && continue
             finding_add "CRITICAL" "tmpdir" "SYSTEM" "PHP file in temp directory: ${file}"
-        done < <(find "$scan_dir" -type f -name "*.php" 2>/dev/null)
+        done < <(find "$scan_dir" -type f -name "*.php" "${exclude_args[@]}" 2>/dev/null)
     done
 
     # --- Suspicious script patterns in all temp files ---
@@ -60,12 +67,13 @@ check_tmpdir_run() {
         done < <(find "$scan_dir" -type f \
             -not -name "*.php" \
             -size -512k \
+            "${exclude_args[@]}" \
             2>/dev/null)
     done
 
     # --- Track new files appearing in temp dirs (baseline comparison) ---
     local current_file="${bdir}/tmpdir.current"
-    _tmpdir_snapshot > "$current_file"
+    _tmpdir_snapshot "${exclude_args[@]}" > "$current_file"
 
     if ! baseline_exists "$bdir" "tmpdir"; then
         cp "$current_file" "${bdir}/tmpdir"
@@ -95,14 +103,19 @@ check_tmpdir_run() {
 check_tmpdir_update() {
     local bdir
     bdir=$(baseline_dir_for "system" "tmpdir")
-    _tmpdir_snapshot > "${bdir}/tmpdir"
+    local exclude_args=()
+    for own_dir in "${LARAWATCH_STATE:-}" "${LARAWATCH_DIR:-}"; do
+        [[ -n "$own_dir" ]] && exclude_args+=(-not -path "${own_dir}/*")
+    done
+    _tmpdir_snapshot "${exclude_args[@]}" > "${bdir}/tmpdir"
     out_ok "Updated tmpdir baseline"
 }
 
+# Accepts optional extra find args (e.g. exclusions) as positional parameters
 _tmpdir_snapshot() {
     for scan_dir in "/tmp" "/var/tmp" "/dev/shm"; do
         [[ -d "$scan_dir" ]] || continue
-        find "$scan_dir" -type f 2>/dev/null | sort | while IFS= read -r f; do
+        find "$scan_dir" -type f "$@" 2>/dev/null | sort | while IFS= read -r f; do
             local hash
             hash=$(sha256sum "$f" 2>/dev/null | awk '{print $1}')
             echo "${hash}  ${f}"
