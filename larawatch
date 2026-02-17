@@ -373,7 +373,7 @@ _interactive_setup() {
     fi
 
     # --- Cron ---
-    if _prompt_yn "Install cron job to scan every 5 minutes?" "y"; then
+    if _prompt_yn "Install cron job for automatic scanning?" "y"; then
         cmd_install_cron
     else
         out_info "Install it later: larawatch install-cron"
@@ -614,16 +614,57 @@ cmd_remove_site() {
 
 cmd_install_cron() {
     local larawatch_bin="${LARAWATCH_DIR}/larawatch"
-    local cron_entry="*/5 * * * * ${larawatch_bin} scan >> ${LARAWATCH_LOGS}/cron.log 2>&1"
+    local minutes="${1:-}"
 
     # Check if already installed
     if crontab -l 2>/dev/null | grep -qF "larawatch scan"; then
         out_warn "LaraWatch cron job already installed"
+        out_info "To change interval: larawatch uninstall-cron && larawatch install-cron [minutes]"
         return 0
     fi
 
+    # If no argument, prompt for interval
+    if [[ -z "$minutes" ]]; then
+        echo "How often should LaraWatch scan?"
+        echo "  1) Every 5 minutes (recommended)"
+        echo "  2) Every 15 minutes"
+        echo "  3) Every 30 minutes"
+        echo "  4) Every 60 minutes"
+        echo "  5) Custom interval"
+        printf "Choose [1-5]: "
+        read -r choice </dev/tty
+        case "${choice}" in
+            1|"") minutes=5 ;;
+            2) minutes=15 ;;
+            3) minutes=30 ;;
+            4) minutes=60 ;;
+            5)
+                printf "Enter interval in minutes (1-1440): "
+                read -r minutes </dev/tty
+                ;;
+            *) out_error "Invalid choice"; return 1 ;;
+        esac
+    fi
+
+    # Validate
+    if ! [[ "$minutes" =~ ^[0-9]+$ ]] || (( minutes < 1 || minutes > 1440 )); then
+        out_error "Invalid interval: must be 1-1440 minutes"
+        return 1
+    fi
+
+    local cron_schedule
+    if (( minutes < 60 )); then
+        cron_schedule="*/${minutes} * * * *"
+    elif (( minutes == 60 )); then
+        cron_schedule="0 * * * *"
+    else
+        local hours=$(( minutes / 60 ))
+        cron_schedule="0 */${hours} * * *"
+    fi
+
+    local cron_entry="${cron_schedule} ${larawatch_bin} scan >> ${LARAWATCH_LOGS}/cron.log 2>&1"
     (crontab -l 2>/dev/null; echo "$cron_entry") | crontab -
-    out_ok "Cron job installed (every 5 minutes)"
+    out_ok "Cron job installed (every ${minutes} minutes)"
     out_dim "  ${cron_entry}"
 }
 
@@ -684,7 +725,7 @@ Commands:
   config --key value            Configure settings
   add-site /path/to/laravel     Add a site manually
   remove-site <name-or-path>    Remove a tracked site
-  install-cron                  Install cron job (every 5 minutes)
+  install-cron [minutes]         Install cron job (default: interactive)
   uninstall-cron                Remove cron job
   self-update                    Pull latest version from GitHub
   version                       Show version
@@ -843,7 +884,7 @@ main() {
         config)         cmd_config "$@" ;;
         add-site)       cmd_add_site "$@" ;;
         remove-site)    cmd_remove_site "$@" ;;
-        install-cron)   cmd_install_cron ;;
+        install-cron)   cmd_install_cron "$@" ;;
         uninstall-cron) cmd_uninstall_cron ;;
         self-update)    cmd_self_update ;;
         version)        cmd_version ;;
