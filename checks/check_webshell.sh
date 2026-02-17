@@ -3,7 +3,8 @@
 # Scans entire site directory for malicious patterns including:
 #   public/, app/, routes/, resources/views/, storage/, bootstrap/, config/, database/
 # Excludes vendor/, node_modules/, storage/framework/views/, storage/logs/, bootstrap/cache/
-# Only scans files modified since last run (full rescan daily)
+# Full scan on first run after init/update; incremental (files modified since
+# last scan) on subsequent runs within 24 hours; full rescan daily.
 # Any match = CRITICAL
 
 # Patterns use extended regex (grep -E) for portability across GNU/BSD
@@ -85,6 +86,9 @@ check_webshell_run() {
 
 check_webshell_update() {
     local site_dir="$1" site_name="$2"
-    baseline_set_last_run "webshell_${site_name}"
-    out_ok "Reset webshell scan timer for ${site_name}"
+    # Intentionally do NOT set last_run here.
+    # The scan timestamp is only written by check_webshell_run, so the next
+    # scan after 'larawatch update' (or 'larawatch init') is always a full
+    # sweep rather than an incremental window that would miss pre-existing files.
+    out_ok "Webshell scan will do a full sweep on next run for ${site_name}"
 }
