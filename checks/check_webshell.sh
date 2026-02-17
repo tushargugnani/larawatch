@@ -1,37 +1,46 @@
 #!/usr/bin/env bash
 # LaraWatch Check: Webshell Pattern Scanning
-# Scans public/, app/, routes/, resources/views/ for malicious patterns
+# Scans public/, app/, routes/, resources/views/, storage/ for malicious patterns
+# Excludes storage/framework/views/ (compiled Blade templates)
 # Only scans files modified since last run (full rescan daily)
 # Any match = CRITICAL
 
 # Patterns use extended regex (grep -E) for portability across GNU/BSD
 WEBSHELL_PATTERNS=(
+    # eval with deobfuscation
     'eval[[:space:]]*\([[:space:]]*base64_decode[[:space:]]*\('
     'eval[[:space:]]*\([[:space:]]*gzinflate[[:space:]]*\('
     'eval[[:space:]]*\([[:space:]]*gzuncompress[[:space:]]*\('
     'eval[[:space:]]*\([[:space:]]*str_rot13[[:space:]]*\('
-    'eval[[:space:]]*\([[:space:]]*\$_POST\['
-    'eval[[:space:]]*\([[:space:]]*\$_GET\['
-    'eval[[:space:]]*\([[:space:]]*\$_REQUEST\['
-    'eval[[:space:]]*\([[:space:]]*\$_COOKIE\['
+    # eval/assert with user input
+    'eval[[:space:]]*\([[:space:]]*\$_(POST|GET|REQUEST|COOKIE)\['
+    'assert[[:space:]]*\([[:space:]]*\$_(POST|GET|REQUEST)\['
+    # Command execution with user input (direct)
     'system[[:space:]]*\([[:space:]]*\$_(POST|GET|REQUEST)\['
     'exec[[:space:]]*\([[:space:]]*\$_(POST|GET|REQUEST)\['
     'passthru[[:space:]]*\([[:space:]]*\$_(POST|GET|REQUEST)\['
     'shell_exec[[:space:]]*\([[:space:]]*\$_(POST|GET|REQUEST)\['
     'proc_open[[:space:]]*\([[:space:]]*\$_(POST|GET|REQUEST)\['
     'popen[[:space:]]*\([[:space:]]*\$_(POST|GET|REQUEST)\['
-    'assert[[:space:]]*\([[:space:]]*\$_(POST|GET|REQUEST)\['
+    # Command execution standalone (outside vendor/) — caught by path filter
+    'shell_exec[[:space:]]*\([[:space:]]*\$'
+    'passthru[[:space:]]*\([[:space:]]*\$'
+    # Dangerous functions with dynamic args
     'preg_replace[[:space:]]*\(.*/e[^"]*"?[[:space:]]*,'
     'create_function[[:space:]]*\('
+    # Obfuscation indicators
     'chr[[:space:]]*\([[:space:]]*[0-9]+[[:space:]]*\)[[:space:]]*\.[[:space:]]*chr[[:space:]]*\([[:space:]]*[0-9]+[[:space:]]*\)'
+    '\\x[0-9a-fA-F]{2}\\x[0-9a-fA-F]{2}\\x[0-9a-fA-F]{2}'
+    # File upload to arbitrary paths
     'file_put_contents[[:space:]]*\(.*\$_(POST|GET|REQUEST)\['
+    'move_uploaded_file[[:space:]]*\(.*\$_(POST|GET|REQUEST)\['
 )
 
 check_webshell_run() {
     local site_dir="$1" site_name="$2"
 
     local scan_dirs=()
-    for d in "public" "app" "routes" "resources/views"; do
+    for d in "public" "app" "routes" "resources/views" "storage"; do
         [[ -d "${site_dir}/${d}" ]] && scan_dirs+=("${site_dir}/${d}")
     done
 
@@ -68,7 +77,10 @@ check_webshell_run() {
                     finding_add "CRITICAL" "webshell" "$site_name" "Pattern found: ${rel_path} - ${match_line}"
                 done <<< "$matches"
             fi
-        done < <(find "$scan_dir" -type f -name "*.php" "${find_time_args[@]}" 2>/dev/null)
+        done < <(find "$scan_dir" -type f -name "*.php" \
+            -not -path "*/storage/framework/views/*" \
+            -not -path "*/storage/logs/*" \
+            "${find_time_args[@]}" 2>/dev/null)
     done
 
     baseline_set_last_run "webshell_${site_name}"
