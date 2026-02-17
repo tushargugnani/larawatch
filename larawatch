@@ -38,6 +38,9 @@ cmd_scan() {
     findings_init
     log_info "Scan started"
 
+    out_header "Security Scan"
+    spinner_start "Running checks..."
+
     local site_count=0 check_count=0
 
     # Per-site checks
@@ -137,6 +140,8 @@ cmd_scan() {
         check_memory_run
         check_count=$((check_count + 1))
     fi
+
+    spinner_stop
 
     # Results
     local total critical_count warning_count info_count
@@ -661,19 +666,22 @@ cmd_install_cron() {
         echo "  3) Every 30 minutes"
         echo "  4) Every 60 minutes"
         echo "  5) Custom interval"
-        printf "Choose [1-5]: "
-        read -r choice </dev/tty
-        case "${choice}" in
-            1|"") minutes=5 ;;
-            2) minutes=15 ;;
-            3) minutes=30 ;;
-            4) minutes=60 ;;
-            5)
-                printf "Enter interval in minutes (1-1440): "
-                read -r minutes </dev/tty
-                ;;
-            *) out_error "Invalid choice"; return 1 ;;
-        esac
+        while true; do
+            printf "Choose [1-5]: "
+            read -r choice </dev/tty
+            case "${choice}" in
+                1|"") minutes=5; break ;;
+                2) minutes=15; break ;;
+                3) minutes=30; break ;;
+                4) minutes=60; break ;;
+                5)
+                    printf "Enter interval in minutes (1-1440): "
+                    read -r minutes </dev/tty
+                    break
+                    ;;
+                *) out_warn "Invalid choice, please enter 1-5" ;;
+            esac
+        done
     fi
 
     # Validate
