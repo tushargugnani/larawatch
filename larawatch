@@ -108,6 +108,16 @@ cmd_scan() {
         check_count=$((check_count + 1))
     fi
 
+    if [[ "${CHECK_SHELL_PROFILES:-true}" == "true" ]]; then
+        check_shell_profiles_run
+        check_count=$((check_count + 1))
+    fi
+
+    if [[ "${CHECK_TMPDIR:-true}" == "true" ]]; then
+        check_tmpdir_run
+        check_count=$((check_count + 1))
+    fi
+
     if [[ "${CHECK_LOG_ANOMALIES:-true}" == "true" ]]; then
         check_log_anomalies_run
         check_count=$((check_count + 1))
@@ -472,6 +482,8 @@ cmd_status() {
         "Service Exposure|CHECK_SERVICE_EXPOSURE"
         "Users|CHECK_USERS"
         "Nginx Config|CHECK_NGINX"
+        "Shell Profiles|CHECK_SHELL_PROFILES"
+        "Temp Dirs|CHECK_TMPDIR"
         "Log Anomalies|CHECK_LOG_ANOMALIES"
         "Disk Usage|CHECK_DISK"
         "CPU Usage|CHECK_CPU"
@@ -793,6 +805,8 @@ _update_all_baselines() {
     [[ "${CHECK_PORTS:-true}" == "true" ]] && check_ports_update
     [[ "${CHECK_USERS:-true}" == "true" ]] && check_users_update
     [[ "${CHECK_NGINX:-true}" == "true" ]] && check_nginx_update
+    [[ "${CHECK_SHELL_PROFILES:-true}" == "true" ]] && check_shell_profiles_update
+    [[ "${CHECK_TMPDIR:-true}" == "true" ]] && check_tmpdir_update
     [[ "${CHECK_LOG_ANOMALIES:-true}" == "true" ]] && check_log_anomalies_update
     check_processes_update
     check_service_exposure_update
