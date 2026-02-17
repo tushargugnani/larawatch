@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # LaraWatch Check: Webshell Pattern Scanning
-# Scans public/, app/, routes/, resources/views/, storage/ for malicious patterns
-# Excludes storage/framework/views/ (compiled Blade templates)
+# Scans entire site directory for malicious patterns including:
+#   public/, app/, routes/, resources/views/, storage/, bootstrap/, config/, database/
+# Excludes vendor/, node_modules/, storage/framework/views/, storage/logs/, bootstrap/cache/
 # Only scans files modified since last run (full rescan daily)
 # Any match = CRITICAL
 
@@ -39,12 +40,7 @@ WEBSHELL_PATTERNS=(
 check_webshell_run() {
     local site_dir="$1" site_name="$2"
 
-    local scan_dirs=()
-    for d in "public" "app" "routes" "resources/views" "storage"; do
-        [[ -d "${site_dir}/${d}" ]] && scan_dirs+=("${site_dir}/${d}")
-    done
-
-    if [[ ${#scan_dirs[@]} -eq 0 ]]; then
+    if [[ ! -d "$site_dir" ]]; then
         return 0
     fi
 
@@ -66,22 +62,23 @@ check_webshell_run() {
     local combined_pattern
     combined_pattern=$(printf '%s\n' "${WEBSHELL_PATTERNS[@]}" | paste -sd'|')
 
-    for scan_dir in "${scan_dirs[@]}"; do
-        while IFS= read -r file; do
-            [[ -z "$file" ]] && continue
-            local matches
-            matches=$(grep -nEi "$combined_pattern" "$file" 2>/dev/null | head -3 || true)
-            if [[ -n "$matches" ]]; then
-                local rel_path="${file#"${site_dir}/"}"
-                while IFS= read -r match_line; do
-                    finding_add "CRITICAL" "webshell" "$site_name" "Pattern found: ${rel_path} - ${match_line}"
-                done <<< "$matches"
-            fi
-        done < <(find -L "$scan_dir" -type f -name "*.php" \
-            -not -path "*/storage/framework/views/*" \
-            -not -path "*/storage/logs/*" \
-            "${find_time_args[@]}" 2>/dev/null)
-    done
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
+        local matches
+        matches=$(grep -nEi "$combined_pattern" "$file" 2>/dev/null | head -3 || true)
+        if [[ -n "$matches" ]]; then
+            local rel_path="${file#"${site_dir}/"}"
+            while IFS= read -r match_line; do
+                finding_add "CRITICAL" "webshell" "$site_name" "Pattern found: ${rel_path} - ${match_line}"
+            done <<< "$matches"
+        fi
+    done < <(find -L "$site_dir" -type f -name "*.php" \
+        -not -path "*/vendor/*" \
+        -not -path "*/node_modules/*" \
+        -not -path "*/storage/framework/views/*" \
+        -not -path "*/storage/logs/*" \
+        -not -path "*/bootstrap/cache/*" \
+        "${find_time_args[@]}" 2>/dev/null)
 
     baseline_set_last_run "webshell_${site_name}"
 }
