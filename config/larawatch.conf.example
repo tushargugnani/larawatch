@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# LaraWatch Configuration
+# Copy to larawatch.conf and customize as needed
+
+# ============================================================
+# Site Discovery
+# ============================================================
+
+# Space-separated directories to scan for Laravel projects
+SCAN_DIRS="/home"
+
+# Maximum directory depth when scanning for artisan files
+# Depth 5 covers: /home/user/site/releases/xxx/artisan (Forge/Envoyer)
+# Depth 4 covers: /home/user/site/current/artisan (via symlink)
+SCAN_DEPTH=5
+
+# Space-separated site names or paths to skip during discovery
+EXCLUDE_SITES=""
+
+# Space-separated paths added manually via 'larawatch add-site'
+MANUAL_SITES=""
+
+# ============================================================
+# Security Checks (true/false)
+# ============================================================
+
+# Per-site checks
+CHECK_PHP_INTEGRITY="true"      # SHA256 hash all PHP files
+CHECK_ENV_INTEGRITY="true"      # .env file hash and permissions
+CHECK_WEBSHELL="true"           # Scan for webshell patterns
+
+# System-wide checks
+CHECK_SSH_KEYS="true"           # authorized_keys monitoring
+CHECK_CRON="true"               # Cron job changes
+CHECK_PORTS="true"              # New listening ports
+CHECK_PROCESSES="true"          # Suspicious process detection
+CHECK_SERVICE_EXPOSURE="true"   # Redis/Memcached/MySQL on 0.0.0.0
+CHECK_USERS="true"              # New users, sudo changes
+CHECK_NGINX="true"              # Nginx config changes
+CHECK_LOG_ANOMALIES="true"      # .env probes, error rate spikes
+
+# ============================================================
+# Notifications - Telegram
+# ============================================================
+
+NOTIFY_TELEGRAM="false"
+TELEGRAM_BOT_TOKEN=""
+TELEGRAM_CHAT_ID=""
+
+# ============================================================
+# Notifications - Email
+# ============================================================
+
+NOTIFY_EMAIL="false"
+EMAIL_TO=""
+EMAIL_FROM="larawatch@localhost"
+EMAIL_SMTP_HOST=""
+EMAIL_SMTP_PORT="587"
+EMAIL_SMTP_USER=""
+EMAIL_SMTP_PASS=""
+
+# ============================================================
+# Notification Behavior
+# ============================================================
+
+# Seconds before resending identical (non-CRITICAL) alerts
+NOTIFY_COOLDOWN=3600
+
+# Minimum severity to trigger notifications: CRITICAL, WARNING, or INFO
+NOTIFY_MIN_SEVERITY="WARNING"
+
+# ============================================================
+# Log Anomalies Settings
+# ============================================================
+
+# Nginx access log path (auto-detected if empty)
+NGINX_ACCESS_LOG=""
+
+# Nginx error log path (auto-detected if empty)
+NGINX_ERROR_LOG=""
+
+# Number of .env probes per scan window to trigger WARNING
+ENV_PROBE_THRESHOLD=5
+
+# 5xx error rate percentage to trigger WARNING
+ERROR_RATE_THRESHOLD=10

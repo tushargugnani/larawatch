@@ -1,0 +1,765 @@
+#!/usr/bin/env bash
+# LaraWatch - Laravel Server Security Monitor
+# https://github.com/larawatch/larawatch
+set -uo pipefail
+
+LARAWATCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source libraries
+source "${LARAWATCH_DIR}/lib/core.sh"
+source "${LARAWATCH_DIR}/lib/sites.sh"
+source "${LARAWATCH_DIR}/lib/baseline.sh"
+
+# Source all check scripts
+for check_file in "${LARAWATCH_DIR}"/checks/check_*.sh; do
+    [[ -f "$check_file" ]] && source "$check_file"
+done
+
+# Source notification scripts
+source "${LARAWATCH_DIR}/notify/telegram.sh"
+source "${LARAWATCH_DIR}/notify/email.sh"
+
+# --- Commands ---
+
+cmd_scan() {
+    config_load || return 1
+    require_init || return 1
+    ensure_dirs
+
+    lock_acquire || return 1
+    trap lock_release EXIT
+
+    findings_init
+    log_info "Scan started"
+
+    local site_count=0 check_count=0
+
+    # Per-site checks
+    while IFS='|' read -r path real_path symlink; do
+        [[ -z "$path" ]] && continue
+        local site_name
+        site_name=$(sites_get_name "$path")
+        local site_dir="$path"
+
+        # Check for deployment via symlink change
+        if [[ -n "$symlink" ]] && sites_check_deployment "$path" "$symlink"; then
+            log_info "Deployment detected for ${site_name} (symlink target changed)"
+            finding_add "INFO" "deployment" "$site_name" "Deployment detected. Run 'larawatch update --site ${site_name}' to refresh baselines."
+            continue
+        fi
+
+        site_count=$((site_count + 1))
+
+        if [[ "${CHECK_PHP_INTEGRITY:-true}" == "true" ]]; then
+            check_php_integrity_run "$site_dir" "$site_name"
+            check_count=$((check_count + 1))
+        fi
+
+        if [[ "${CHECK_ENV_INTEGRITY:-true}" == "true" ]]; then
+            check_env_integrity_run "$site_dir" "$site_name"
+            check_count=$((check_count + 1))
+        fi
+
+        if [[ "${CHECK_WEBSHELL:-true}" == "true" ]]; then
+            check_webshell_run "$site_dir" "$site_name"
+            check_count=$((check_count + 1))
+        fi
+    done < <(sites_load)
+
+    # System-wide checks
+    if [[ "${CHECK_SSH_KEYS:-true}" == "true" ]]; then
+        check_ssh_keys_run
+        check_count=$((check_count + 1))
+    fi
+
+    if [[ "${CHECK_CRON:-true}" == "true" ]]; then
+        check_cron_run
+        check_count=$((check_count + 1))
+    fi
+
+    if [[ "${CHECK_PORTS:-true}" == "true" ]]; then
+        check_ports_run
+        check_count=$((check_count + 1))
+    fi
+
+    if [[ "${CHECK_PROCESSES:-true}" == "true" ]]; then
+        check_processes_run
+        check_count=$((check_count + 1))
+    fi
+
+    if [[ "${CHECK_SERVICE_EXPOSURE:-true}" == "true" ]]; then
+        check_service_exposure_run
+        check_count=$((check_count + 1))
+    fi
+
+    if [[ "${CHECK_USERS:-true}" == "true" ]]; then
+        check_users_run
+        check_count=$((check_count + 1))
+    fi
+
+    if [[ "${CHECK_NGINX:-true}" == "true" ]]; then
+        check_nginx_run
+        check_count=$((check_count + 1))
+    fi
+
+    if [[ "${CHECK_LOG_ANOMALIES:-true}" == "true" ]]; then
+        check_log_anomalies_run
+        check_count=$((check_count + 1))
+    fi
+
+    # Results
+    local total critical_count warning_count info_count
+    total=$(findings_count)
+    critical_count=$(findings_count "CRITICAL")
+    warning_count=$(findings_count "WARNING")
+    info_count=$(findings_count "INFO")
+
+    log_info "Scan completed: ${check_count} checks across ${site_count} sites, ${total} findings"
+
+    # Display findings to terminal
+    if [[ "$total" -gt 0 ]]; then
+        out_header "Scan Results"
+        printf "  Sites: %d | Checks: %d | Findings: %d\n" "$site_count" "$check_count" "$total"
+        [[ "$critical_count" -gt 0 ]] && printf "  ${RED}CRITICAL: %d${RESET}\n" "$critical_count"
+        [[ "$warning_count" -gt 0 ]] && printf "  ${YELLOW}WARNING: %d${RESET}\n" "$warning_count"
+        [[ "$info_count" -gt 0 ]] && printf "  ${BLUE}INFO: %d${RESET}\n" "$info_count"
+        echo
+
+        while IFS='|' read -r severity check site message; do
+            out_table_row "$severity" "$check" "$site" "$message"
+        done < <(findings_get)
+        echo
+
+        # Send notifications
+        notify_dispatch
+    else
+        out_ok "Scan complete: ${check_count} checks across ${site_count} sites -- no issues found"
+    fi
+
+    # Record last run
+    date +%s > "${LARAWATCH_STATE}/.last_scan"
+}
+
+cmd_init() {
+    ensure_dirs
+    out_banner
+
+    # Copy config if missing
+    if [[ ! -f "$LARAWATCH_CONF" ]]; then
+        cp "${LARAWATCH_DIR}/config/larawatch.conf.example" "$LARAWATCH_CONF"
+        out_ok "Created config: ${LARAWATCH_CONF}"
+    fi
+
+    config_load || return 1
+
+    out_header "Discovering Laravel Sites"
+
+    local sites_data
+    sites_data=$(sites_discover)
+
+    if [[ -z "$sites_data" ]]; then
+        out_warn "No Laravel sites found in ${SCAN_DIRS:-/home} (depth ${SCAN_DEPTH:-4})"
+        out_info "Add sites manually: larawatch add-site /path/to/laravel"
+    else
+        echo "$sites_data" | sites_save
+
+        local count=0
+        while IFS='|' read -r path real_path symlink; do
+            [[ -z "$path" ]] && continue
+            local name
+            name=$(sites_get_name "$path")
+            count=$((count + 1))
+            out_ok "Found: ${name} (${path})"
+        done <<< "$sites_data"
+        out_info "Discovered ${count} Laravel site(s)"
+    fi
+
+    # Add manual sites
+    if [[ -n "${MANUAL_SITES:-}" ]]; then
+        for site_path in $MANUAL_SITES; do
+            if [[ -f "${site_path}/artisan" ]]; then
+                sites_add "$site_path" 2>/dev/null
+            fi
+        done
+    fi
+
+    # Create baselines
+    out_header "Creating Baselines"
+    _update_all_baselines
+
+    # Interactive setup if running in a terminal
+    if [[ -t 0 ]] && [[ -t 1 ]]; then
+        _interactive_setup
+    else
+        out_header "Initialization Complete"
+        out_ok "LaraWatch is ready"
+        out_info "Next steps:"
+        echo "  1. Configure notifications:"
+        echo "     larawatch config --telegram-token TOKEN --telegram-chat CHAT_ID"
+        echo "  2. Install cron: larawatch install-cron"
+        echo "  3. Run first scan: larawatch scan"
+    fi
+}
+
+# --- Interactive Setup Helpers ---
+
+_prompt_yn() {
+    local prompt="$1" default="${2:-n}"
+    local yn_hint
+    if [[ "$default" == "y" ]]; then
+        yn_hint="[Y/n]"
+    else
+        yn_hint="[y/N]"
+    fi
+    printf "\n${BOLD}%s${RESET} %s " "$prompt" "$yn_hint"
+    local answer
+    read -r answer
+    answer="${answer:-$default}"
+    [[ "${answer,,}" == "y" ]]
+}
+
+_prompt_input() {
+    local prompt="$1" default="${2:-}"
+    if [[ -n "$default" ]]; then
+        printf "  ${BOLD}%s${RESET} [%s]: " "$prompt" "$default"
+    else
+        printf "  ${BOLD}%s${RESET}: " "$prompt"
+    fi
+    local answer
+    read -r answer
+    echo "${answer:-$default}"
+}
+
+_interactive_setup() {
+    out_header "Notification Setup"
+    out_dim "Configure how you want to be alerted when issues are found."
+    out_dim "You can skip any step and configure later with 'larawatch config'."
+
+    # --- Telegram ---
+    if _prompt_yn "Set up Telegram notifications?" "n"; then
+        echo
+        out_info "To get started with Telegram:"
+        out_dim "  1. Message @BotFather on Telegram → /newbot → copy the bot token"
+        out_dim "  2. Start a chat with your bot, send any message"
+        out_dim "  3. Visit: https://api.telegram.org/bot<TOKEN>/getUpdates"
+        out_dim "  4. Look for \"chat\":{\"id\":XXXXXXX} — that's your chat ID"
+        echo
+
+        local tg_token tg_chat
+        tg_token=$(_prompt_input "Bot token")
+        tg_chat=$(_prompt_input "Chat ID")
+
+        if [[ -n "$tg_token" ]] && [[ -n "$tg_chat" ]]; then
+            config_set "TELEGRAM_BOT_TOKEN" "$tg_token"
+            config_set "TELEGRAM_CHAT_ID" "$tg_chat"
+            config_set "NOTIFY_TELEGRAM" "true"
+            config_load
+            out_ok "Telegram configured"
+
+            if _prompt_yn "Send a test message to verify?" "y"; then
+                source "${LARAWATCH_DIR}/notify/telegram.sh"
+                if telegram_test 2>/dev/null; then
+                    out_ok "Test message sent — check your Telegram!"
+                else
+                    out_warn "Test failed. Verify your token and chat ID."
+                    out_info "Reconfigure anytime: larawatch config --telegram-token TOKEN --telegram-chat CHAT_ID"
+                fi
+            fi
+        else
+            out_warn "Skipped — bot token or chat ID was empty"
+        fi
+    fi
+
+    # --- Email ---
+    if _prompt_yn "Set up Email notifications?" "n"; then
+        echo
+        local email_to email_smtp email_port email_user email_pass email_from
+
+        email_to=$(_prompt_input "Recipient email address")
+
+        if [[ -n "$email_to" ]]; then
+            email_from=$(_prompt_input "Sender email (From)" "larawatch@$(hostname -f 2>/dev/null || echo 'localhost')")
+            email_smtp=$(_prompt_input "SMTP host" "smtp.gmail.com")
+            email_port=$(_prompt_input "SMTP port" "587")
+            email_user=$(_prompt_input "SMTP username" "$email_to")
+            # Read password without echo
+            printf "  ${BOLD}SMTP password${RESET}: "
+            read -rs email_pass
+            echo
+
+            config_set "EMAIL_TO" "$email_to"
+            config_set "EMAIL_FROM" "$email_from"
+            [[ -n "$email_smtp" ]] && config_set "EMAIL_SMTP_HOST" "$email_smtp"
+            [[ -n "$email_port" ]] && config_set "EMAIL_SMTP_PORT" "$email_port"
+            [[ -n "$email_user" ]] && config_set "EMAIL_SMTP_USER" "$email_user"
+            [[ -n "$email_pass" ]] && config_set "EMAIL_SMTP_PASS" "$email_pass"
+            config_set "NOTIFY_EMAIL" "true"
+            config_load
+            out_ok "Email configured"
+
+            if _prompt_yn "Send a test email to verify?" "y"; then
+                source "${LARAWATCH_DIR}/notify/email.sh"
+                if email_test 2>/dev/null; then
+                    out_ok "Test email sent — check your inbox!"
+                else
+                    out_warn "Test failed. Verify your SMTP settings."
+                    out_info "Reconfigure anytime: larawatch config --email-to ADDRESS --email-smtp HOST"
+                fi
+            fi
+        else
+            out_warn "Skipped — no recipient email provided"
+        fi
+    fi
+
+    # --- Cron ---
+    if _prompt_yn "Install cron job to scan every 5 minutes?" "y"; then
+        cmd_install_cron
+    else
+        out_info "Install it later: larawatch install-cron"
+    fi
+
+    # --- First scan ---
+    if _prompt_yn "Run your first scan now?" "y"; then
+        echo
+        cmd_scan
+    else
+        out_info "Run when ready: larawatch scan"
+    fi
+
+    echo
+    out_header "Setup Complete"
+    out_ok "LaraWatch is ready to protect your server"
+}
+
+cmd_update() {
+    config_load || return 1
+    require_init || return 1
+
+    local target_site="" target_check=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --site) target_site="$2"; shift 2 ;;
+            --check) target_check="$2"; shift 2 ;;
+            *) out_error "Unknown option: $1"; return 1 ;;
+        esac
+    done
+
+    if [[ -n "$target_check" ]]; then
+        _update_check "$target_check" "$target_site"
+    elif [[ -n "$target_site" ]]; then
+        _update_site "$target_site"
+    else
+        _update_all_baselines
+    fi
+}
+
+cmd_status() {
+    config_load || return 1
+
+    out_banner
+
+    # Last scan
+    if [[ -f "${LARAWATCH_STATE}/.last_scan" ]]; then
+        local last_ts last_date
+        last_ts=$(cat "${LARAWATCH_STATE}/.last_scan")
+        last_date=$(date -d "@${last_ts}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -r "$last_ts" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "unknown")
+        out_status_line "Last scan:" "$last_date"
+    else
+        out_status_line "Last scan:" "never"
+    fi
+
+    # Sites
+    out_header "Monitored Sites"
+    local site_list
+    site_list=$(sites_list 2>/dev/null)
+    if [[ -n "$site_list" ]]; then
+        while IFS='|' read -r name path real_path symlink; do
+            local deploy_type="direct"
+            [[ -n "$symlink" ]] && deploy_type="symlink"
+            out_status_line "$name" "${path} (${deploy_type})"
+        done <<< "$site_list"
+    else
+        out_dim "  No sites tracked"
+    fi
+
+    # Checks
+    out_header "Security Checks"
+    local checks=(
+        "PHP Integrity|CHECK_PHP_INTEGRITY"
+        "Env Integrity|CHECK_ENV_INTEGRITY"
+        "Webshell Scan|CHECK_WEBSHELL"
+        "SSH Keys|CHECK_SSH_KEYS"
+        "Cron Jobs|CHECK_CRON"
+        "Ports|CHECK_PORTS"
+        "Processes|CHECK_PROCESSES"
+        "Service Exposure|CHECK_SERVICE_EXPOSURE"
+        "Users|CHECK_USERS"
+        "Nginx Config|CHECK_NGINX"
+        "Log Anomalies|CHECK_LOG_ANOMALIES"
+    )
+
+    for entry in "${checks[@]}"; do
+        local label var
+        label=$(echo "$entry" | cut -d'|' -f1)
+        var=$(echo "$entry" | cut -d'|' -f2)
+        local val="${!var:-true}"
+        if [[ "$val" == "true" ]]; then
+            out_status_line "$label" "enabled" "$GREEN"
+        else
+            out_status_line "$label" "disabled" "$DIM"
+        fi
+    done
+
+    # Notifications
+    out_header "Notifications"
+    if [[ "${NOTIFY_TELEGRAM:-false}" == "true" ]]; then
+        out_status_line "Telegram:" "enabled" "$GREEN"
+    else
+        out_status_line "Telegram:" "not configured" "$DIM"
+    fi
+    if [[ "${NOTIFY_EMAIL:-false}" == "true" ]]; then
+        out_status_line "Email:" "enabled (${EMAIL_TO:-})" "$GREEN"
+    else
+        out_status_line "Email:" "not configured" "$DIM"
+    fi
+
+    echo
+}
+
+cmd_test() {
+    config_load || return 1
+
+    out_info "Sending test notifications..."
+
+    local sent=false
+    if [[ "${NOTIFY_TELEGRAM:-false}" == "true" ]]; then
+        telegram_test && sent=true
+    fi
+    if [[ "${NOTIFY_EMAIL:-false}" == "true" ]]; then
+        email_test && sent=true
+    fi
+
+    if [[ "$sent" == "false" ]]; then
+        out_warn "No notification channels configured"
+        out_info "Configure with:"
+        echo "  larawatch config --telegram-token TOKEN --telegram-chat CHAT_ID"
+        echo "  larawatch config --email-to you@example.com"
+    fi
+}
+
+cmd_config() {
+    if [[ ! -f "$LARAWATCH_CONF" ]]; then
+        cp "${LARAWATCH_DIR}/config/larawatch.conf.example" "$LARAWATCH_CONF"
+    fi
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --telegram-token)
+                config_set "TELEGRAM_BOT_TOKEN" "$2"
+                config_set "NOTIFY_TELEGRAM" "true"
+                out_ok "Telegram bot token configured"
+                shift 2 ;;
+            --telegram-chat)
+                config_set "TELEGRAM_CHAT_ID" "$2"
+                config_set "NOTIFY_TELEGRAM" "true"
+                out_ok "Telegram chat ID configured"
+                shift 2 ;;
+            --email-to)
+                config_set "EMAIL_TO" "$2"
+                config_set "NOTIFY_EMAIL" "true"
+                out_ok "Email recipient configured: $2"
+                shift 2 ;;
+            --email-from)
+                config_set "EMAIL_FROM" "$2"
+                out_ok "Email sender configured: $2"
+                shift 2 ;;
+            --email-smtp)
+                config_set "EMAIL_SMTP_HOST" "$2"
+                out_ok "SMTP host configured: $2"
+                shift 2 ;;
+            --email-smtp-port)
+                config_set "EMAIL_SMTP_PORT" "$2"
+                shift 2 ;;
+            --email-smtp-user)
+                config_set "EMAIL_SMTP_USER" "$2"
+                shift 2 ;;
+            --email-smtp-pass)
+                config_set "EMAIL_SMTP_PASS" "$2"
+                shift 2 ;;
+            --cooldown)
+                config_set "NOTIFY_COOLDOWN" "$2"
+                out_ok "Cooldown set to ${2}s"
+                shift 2 ;;
+            --min-severity)
+                config_set "NOTIFY_MIN_SEVERITY" "$2"
+                out_ok "Minimum severity set to $2"
+                shift 2 ;;
+            --scan-dirs)
+                config_set "SCAN_DIRS" "$2"
+                out_ok "Scan directories set to: $2"
+                shift 2 ;;
+            --scan-depth)
+                config_set "SCAN_DEPTH" "$2"
+                out_ok "Scan depth set to: $2"
+                shift 2 ;;
+            *)
+                out_error "Unknown config option: $1"
+                return 1 ;;
+        esac
+    done
+}
+
+cmd_add_site() {
+    local path="${1:-}"
+    if [[ -z "$path" ]]; then
+        out_error "Usage: larawatch add-site /path/to/laravel"
+        return 1
+    fi
+
+    config_load || return 1
+    require_init || return 1
+
+    sites_add "$path" || return 1
+
+    # Create baselines for the new site
+    local site_name
+    site_name=$(sites_get_name "$path")
+    path="$(readlink -f "$path" 2>/dev/null || echo "$path")"
+
+    out_info "Creating baselines for ${site_name}..."
+    if [[ "${CHECK_PHP_INTEGRITY:-true}" == "true" ]]; then
+        check_php_integrity_update "$path" "$site_name"
+    fi
+    if [[ "${CHECK_ENV_INTEGRITY:-true}" == "true" ]]; then
+        check_env_integrity_update "$path" "$site_name"
+    fi
+    if [[ "${CHECK_WEBSHELL:-true}" == "true" ]]; then
+        check_webshell_update "$path" "$site_name"
+    fi
+}
+
+cmd_remove_site() {
+    local identifier="${1:-}"
+    if [[ -z "$identifier" ]]; then
+        out_error "Usage: larawatch remove-site <site-name-or-path>"
+        return 1
+    fi
+
+    config_load || return 1
+    require_init || return 1
+    sites_remove "$identifier"
+}
+
+cmd_install_cron() {
+    local larawatch_bin="${LARAWATCH_DIR}/larawatch"
+    local cron_entry="*/5 * * * * ${larawatch_bin} scan >> ${LARAWATCH_LOGS}/cron.log 2>&1"
+
+    # Check if already installed
+    if crontab -l 2>/dev/null | grep -qF "larawatch scan"; then
+        out_warn "LaraWatch cron job already installed"
+        return 0
+    fi
+
+    (crontab -l 2>/dev/null; echo "$cron_entry") | crontab -
+    out_ok "Cron job installed (every 5 minutes)"
+    out_dim "  ${cron_entry}"
+}
+
+cmd_uninstall_cron() {
+    if crontab -l 2>/dev/null | grep -qF "larawatch scan"; then
+        crontab -l 2>/dev/null | grep -vF "larawatch scan" | crontab -
+        out_ok "LaraWatch cron job removed"
+    else
+        out_info "No LaraWatch cron job found"
+    fi
+}
+
+cmd_version() {
+    echo "LaraWatch v${LARAWATCH_VERSION}"
+}
+
+cmd_help() {
+    out_banner
+    cat <<'HELP'
+Usage: larawatch <command> [options]
+
+Commands:
+  scan                          Run all security checks (default)
+  init                          First-time setup: discover sites, create baselines
+  update [--site X] [--check Y] Refresh baselines (after deploy/changes)
+  status                        Dashboard showing all checks and sites
+  test                          Send test notification
+  config --key value            Configure settings
+  add-site /path/to/laravel     Add a site manually
+  remove-site <name-or-path>    Remove a tracked site
+  install-cron                  Install cron job (every 5 minutes)
+  uninstall-cron                Remove cron job
+  version                       Show version
+  help                          Show this help
+
+Config options:
+  --telegram-token TOKEN        Telegram bot token
+  --telegram-chat CHAT_ID       Telegram chat ID
+  --email-to ADDRESS            Email recipient
+  --email-smtp HOST             SMTP server hostname
+  --email-smtp-port PORT        SMTP port (default: 587)
+  --email-smtp-user USER        SMTP username
+  --email-smtp-pass PASS        SMTP password
+  --cooldown SECONDS            Notification cooldown (default: 3600)
+  --min-severity LEVEL          Minimum severity: CRITICAL, WARNING, INFO
+  --scan-dirs DIRS              Space-separated directories to scan
+  --scan-depth N                Max scan depth (default: 4)
+
+Examples:
+  larawatch init                          # Initial setup
+  larawatch scan                          # Run all checks
+  larawatch update --site mysite.com      # Update baselines for one site
+  larawatch config --telegram-token X --telegram-chat Y
+  larawatch test                          # Verify notifications
+HELP
+}
+
+# --- Internal helpers ---
+
+_update_all_baselines() {
+    local sites
+    sites=$(sites_load 2>/dev/null)
+
+    if [[ -n "$sites" ]]; then
+        while IFS='|' read -r path real_path symlink; do
+            [[ -z "$path" ]] && continue
+            local site_name
+            site_name=$(sites_get_name "$path")
+            out_subheader "Baseline: ${site_name}"
+            _update_site_baselines "$path" "$site_name"
+        done <<< "$sites"
+    fi
+
+    out_subheader "System Baselines"
+    [[ "${CHECK_SSH_KEYS:-true}" == "true" ]] && check_ssh_keys_update
+    [[ "${CHECK_CRON:-true}" == "true" ]] && check_cron_update
+    [[ "${CHECK_PORTS:-true}" == "true" ]] && check_ports_update
+    [[ "${CHECK_USERS:-true}" == "true" ]] && check_users_update
+    [[ "${CHECK_NGINX:-true}" == "true" ]] && check_nginx_update
+    [[ "${CHECK_LOG_ANOMALIES:-true}" == "true" ]] && check_log_anomalies_update
+    check_processes_update
+    check_service_exposure_update
+}
+
+_update_site_baselines() {
+    local site_dir="$1" site_name="$2"
+    [[ "${CHECK_PHP_INTEGRITY:-true}" == "true" ]] && check_php_integrity_update "$site_dir" "$site_name"
+    [[ "${CHECK_ENV_INTEGRITY:-true}" == "true" ]] && check_env_integrity_update "$site_dir" "$site_name"
+    [[ "${CHECK_WEBSHELL:-true}" == "true" ]] && check_webshell_update "$site_dir" "$site_name"
+}
+
+_update_site() {
+    local identifier="$1"
+    config_load || return 1
+    require_init || return 1
+
+    local path
+    path=$(sites_get_path "$identifier")
+    if [[ -z "$path" ]]; then
+        out_error "Site not found: ${identifier}"
+        return 1
+    fi
+
+    local site_name
+    site_name=$(sites_get_name "$path")
+    out_subheader "Updating baselines: ${site_name}"
+    _update_site_baselines "$path" "$site_name"
+
+    # Update symlink target if applicable
+    local sites_file="${LARAWATCH_STATE}/sites.list"
+    local parent_dir
+    parent_dir="$(dirname "$path")"
+    if [[ -L "${parent_dir}/current" ]]; then
+        local new_target
+        new_target="$(readlink -f "${parent_dir}/current")"
+        local tmpfile="${sites_file}.tmp"
+        while IFS='|' read -r p rp sl; do
+            local n
+            n=$(sites_get_name "$p")
+            if [[ "$n" == "$site_name" ]] || [[ "$p" == "$path" ]]; then
+                echo "${p}|${rp}|${new_target}"
+            else
+                echo "${p}|${rp}|${sl}"
+            fi
+        done < "$sites_file" > "$tmpfile"
+        mv "$tmpfile" "$sites_file"
+    fi
+}
+
+_update_check() {
+    local check="$1" site="${2:-}"
+    config_load || return 1
+    require_init || return 1
+
+    case "$check" in
+        php_integrity)
+            if [[ -n "$site" ]]; then
+                local path
+                path=$(sites_get_path "$site") || { out_error "Site not found: $site"; return 1; }
+                check_php_integrity_update "$path" "$(sites_get_name "$path")"
+            else
+                while IFS='|' read -r path real_path symlink; do
+                    [[ -z "$path" ]] && continue
+                    check_php_integrity_update "$path" "$(sites_get_name "$path")"
+                done < <(sites_load)
+            fi ;;
+        env_integrity)
+            if [[ -n "$site" ]]; then
+                local path
+                path=$(sites_get_path "$site") || { out_error "Site not found: $site"; return 1; }
+                check_env_integrity_update "$path" "$(sites_get_name "$path")"
+            else
+                while IFS='|' read -r path real_path symlink; do
+                    [[ -z "$path" ]] && continue
+                    check_env_integrity_update "$path" "$(sites_get_name "$path")"
+                done < <(sites_load)
+            fi ;;
+        webshell)     check_webshell_update "${site:-all}" "${site:-all}" ;;
+        ssh_keys)     check_ssh_keys_update ;;
+        cron)         check_cron_update ;;
+        ports)        check_ports_update ;;
+        processes)    check_processes_update ;;
+        service_exposure) check_service_exposure_update ;;
+        users)        check_users_update ;;
+        nginx)        check_nginx_update ;;
+        log_anomalies) check_log_anomalies_update ;;
+        *)
+            out_error "Unknown check: ${check}"
+            out_info "Available: php_integrity, env_integrity, webshell, ssh_keys, cron, ports, processes, service_exposure, users, nginx, log_anomalies"
+            return 1 ;;
+    esac
+}
+
+# --- Main ---
+
+main() {
+    local command="${1:-scan}"
+    shift 2>/dev/null || true
+
+    case "$command" in
+        scan)           cmd_scan ;;
+        init)           cmd_init ;;
+        update)         cmd_update "$@" ;;
+        status)         cmd_status ;;
+        test)           cmd_test ;;
+        config)         cmd_config "$@" ;;
+        add-site)       cmd_add_site "$@" ;;
+        remove-site)    cmd_remove_site "$@" ;;
+        install-cron)   cmd_install_cron ;;
+        uninstall-cron) cmd_uninstall_cron ;;
+        version)        cmd_version ;;
+        help|--help|-h) cmd_help ;;
+        *)
+            out_error "Unknown command: ${command}"
+            cmd_help
+            return 1 ;;
+    esac
+}
+
+main "$@"

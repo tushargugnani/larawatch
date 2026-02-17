@@ -1,0 +1,6 @@
+state/
+logs/
+config/larawatch.conf
+*.tmp
+*.swp
+*.bak
