@@ -86,6 +86,10 @@ The interactive setup during `larawatch init` will walk you through configuring 
 
 ### Telegram
 
+During `larawatch init`, just paste your bot token — LaraWatch will automatically detect your chat ID when you send a message to the bot. No need to manually look up chat IDs.
+
+To configure manually:
+
 ```bash
 larawatch config --telegram-token "123456:ABC-DEF" --telegram-chat "-1001234567890"
 larawatch test  # send a test message

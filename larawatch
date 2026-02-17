@@ -238,35 +238,90 @@ _interactive_setup() {
     # --- Telegram ---
     if _prompt_yn "Set up Telegram notifications?" "n"; then
         echo
-        out_info "To get started with Telegram:"
-        out_dim "  1. Message @BotFather on Telegram → /newbot → copy the bot token"
-        out_dim "  2. Start a chat with your bot, send any message"
-        out_dim "  3. Visit: https://api.telegram.org/bot<TOKEN>/getUpdates"
-        out_dim "  4. Look for \"chat\":{\"id\":XXXXXXX} — that's your chat ID"
+        out_info "Create a bot via @BotFather on Telegram (/newbot) and paste the token below."
         echo
 
-        local tg_token tg_chat
+        local tg_token
         tg_token=$(_prompt_input "Bot token")
-        tg_chat=$(_prompt_input "Chat ID")
 
-        if [[ -n "$tg_token" ]] && [[ -n "$tg_chat" ]]; then
-            config_set "TELEGRAM_BOT_TOKEN" "$tg_token"
-            config_set "TELEGRAM_CHAT_ID" "$tg_chat"
-            config_set "NOTIFY_TELEGRAM" "true"
-            config_load
-            out_ok "Telegram configured"
+        if [[ -n "$tg_token" ]]; then
+            # Validate token via getMe
+            local me_response me_http
+            me_response=$(curl -s -w "\n%{http_code}" "https://api.telegram.org/bot${tg_token}/getMe" --max-time 10 2>&1)
+            me_http=$(echo "$me_response" | tail -1)
 
-            if _prompt_yn "Send a test message to verify?" "y"; then
-                source "${LARAWATCH_DIR}/notify/telegram.sh"
-                if telegram_test 2>/dev/null; then
-                    out_ok "Test message sent — check your Telegram!"
+            if [[ "$me_http" != "200" ]]; then
+                out_error "Invalid bot token — Telegram API returned HTTP ${me_http}"
+                out_info "Reconfigure anytime: larawatch config --telegram-token TOKEN --telegram-chat CHAT_ID"
+            else
+                local bot_name
+                bot_name=$(echo "$me_response" | sed '$d' | grep -oP '"username"\s*:\s*"\K[^"]+' || echo "your bot")
+                out_ok "Bot verified: @${bot_name}"
+                echo
+
+                # Clear any old updates so we only detect new messages
+                curl -s "https://api.telegram.org/bot${tg_token}/getUpdates?offset=-1" --max-time 5 >/dev/null 2>&1
+
+                out_info "Now open Telegram and send any message to @${bot_name}"
+                out_dim "Waiting for your message (up to 60 seconds)..."
+
+                local tg_chat="" attempts=0 max_attempts=30
+                while [[ -z "$tg_chat" ]] && [[ $attempts -lt $max_attempts ]]; do
+                    sleep 2
+                    attempts=$((attempts + 1))
+
+                    local updates
+                    updates=$(curl -s "https://api.telegram.org/bot${tg_token}/getUpdates?timeout=1&limit=1" --max-time 5 2>/dev/null)
+                    tg_chat=$(echo "$updates" | grep -oP '"chat"\s*:\s*\{[^}]*"id"\s*:\s*\K-?[0-9]+' | head -1)
+
+                    # Print progress dots
+                    printf "."
+                done
+                echo
+
+                if [[ -n "$tg_chat" ]]; then
+                    # Extract sender name for confirmation
+                    local sender_name
+                    sender_name=$(echo "$updates" | grep -oP '"from"\s*:\s*\{[^}]*"first_name"\s*:\s*"\K[^"]+' | head -1)
+                    out_ok "Detected chat from ${sender_name:-user} (chat ID: ${tg_chat})"
+
+                    config_set "TELEGRAM_BOT_TOKEN" "$tg_token"
+                    config_set "TELEGRAM_CHAT_ID" "$tg_chat"
+                    config_set "NOTIFY_TELEGRAM" "true"
+                    config_load
+
+                    # Send confirmation message
+                    source "${LARAWATCH_DIR}/notify/telegram.sh"
+                    if telegram_test 2>/dev/null; then
+                        out_ok "Telegram configured and verified — check your Telegram!"
+                    else
+                        out_ok "Telegram configured (chat ID: ${tg_chat})"
+                    fi
                 else
-                    out_warn "Test failed. Verify your token and chat ID."
-                    out_info "Reconfigure anytime: larawatch config --telegram-token TOKEN --telegram-chat CHAT_ID"
+                    out_warn "No message detected within 60 seconds"
+                    out_info "You can enter the chat ID manually, or skip and configure later."
+                    local manual_chat
+                    manual_chat=$(_prompt_input "Chat ID (or leave empty to skip)")
+                    if [[ -n "$manual_chat" ]]; then
+                        config_set "TELEGRAM_BOT_TOKEN" "$tg_token"
+                        config_set "TELEGRAM_CHAT_ID" "$manual_chat"
+                        config_set "NOTIFY_TELEGRAM" "true"
+                        config_load
+                        out_ok "Telegram configured"
+
+                        source "${LARAWATCH_DIR}/notify/telegram.sh"
+                        if telegram_test 2>/dev/null; then
+                            out_ok "Test message sent — check your Telegram!"
+                        else
+                            out_warn "Test failed. Verify your chat ID."
+                        fi
+                    else
+                        out_info "Skipped. Configure later: larawatch config --telegram-token TOKEN --telegram-chat CHAT_ID"
+                    fi
                 fi
             fi
         else
-            out_warn "Skipped — bot token or chat ID was empty"
+            out_warn "Skipped — no token provided"
         fi
     fi
 
