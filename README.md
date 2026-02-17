@@ -7,8 +7,16 @@ Pure Bash. Zero dependencies beyond standard Linux tools. Works on Forge, Ploi, 
 ## Quick Start
 
 ```bash
+bash <(curl -s https://raw.githubusercontent.com/tushargugnani/larawatch/main/install.sh)
+```
+
+Or clone manually:
+
+```bash
 git clone https://github.com/tushargugnani/larawatch.git ~/.larawatch && ~/.larawatch/install.sh
 ```
+
+Re-running the installer on an existing install will pull the latest updates and re-initialize.
 
 The installer will:
 1. Auto-discover all Laravel sites on your server

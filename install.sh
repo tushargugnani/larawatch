@@ -1,7 +1,26 @@
 #!/usr/bin/env bash
 # LaraWatch Installer
-# Usage: git clone https://github.com/<user>/larawatch.git ~/.larawatch && ~/.larawatch/install.sh
+# Usage: bash <(curl -s https://raw.githubusercontent.com/tushargugnani/larawatch/main/install.sh)
+#    or: git clone ... ~/.larawatch && ~/.larawatch/install.sh
 set -euo pipefail
+
+LARAWATCH_REPO="https://github.com/tushargugnani/larawatch.git"
+LARAWATCH_INSTALL_DIR="${HOME}/.larawatch"
+
+# If running from curl (not inside the repo), clone first
+if [[ ! -f "$(dirname "${BASH_SOURCE[0]}")/lib/output.sh" ]]; then
+    if [[ -d "$LARAWATCH_INSTALL_DIR/.git" ]]; then
+        echo "Updating existing installation..."
+        git -C "$LARAWATCH_INSTALL_DIR" pull --ff-only 2>/dev/null || true
+    elif [[ -d "$LARAWATCH_INSTALL_DIR" ]]; then
+        echo "Removing stale directory and cloning fresh..."
+        rm -rf "$LARAWATCH_INSTALL_DIR"
+        git clone "$LARAWATCH_REPO" "$LARAWATCH_INSTALL_DIR"
+    else
+        git clone "$LARAWATCH_REPO" "$LARAWATCH_INSTALL_DIR"
+    fi
+    exec "$LARAWATCH_INSTALL_DIR/install.sh"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/output.sh"
