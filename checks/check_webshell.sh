@@ -77,7 +77,7 @@ check_webshell_run() {
                     finding_add "CRITICAL" "webshell" "$site_name" "Pattern found: ${rel_path} - ${match_line}"
                 done <<< "$matches"
             fi
-        done < <(find "$scan_dir" -type f -name "*.php" \
+        done < <(find -L "$scan_dir" -type f -name "*.php" \
             -not -path "*/storage/framework/views/*" \
             -not -path "*/storage/logs/*" \
             "${find_time_args[@]}" 2>/dev/null)

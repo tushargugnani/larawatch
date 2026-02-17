@@ -61,7 +61,7 @@ baseline_hash_php_files() {
         find_args+=(-not -path "$pattern")
     done
 
-    find "${find_args[@]}" 2>/dev/null | sort | while IFS= read -r file; do
+    find -L "${find_args[@]}" 2>/dev/null | sort | while IFS= read -r file; do
         local rel_path="${file#${site_dir}/}"
         local hash
         hash=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
