@@ -211,7 +211,7 @@ _prompt_yn() {
     else
         yn_hint="[y/N]"
     fi
-    printf "\n${BOLD}%s${RESET} %s " "$prompt" "$yn_hint"
+    printf "\n${BOLD}%s${RESET} %s " "$prompt" "$yn_hint" >/dev/tty
     local answer
     read -r answer
     answer="${answer:-$default}"
@@ -221,9 +221,9 @@ _prompt_yn() {
 _prompt_input() {
     local prompt="$1" default="${2:-}"
     if [[ -n "$default" ]]; then
-        printf "  ${BOLD}%s${RESET} [%s]: " "$prompt" "$default"
+        printf "  ${BOLD}%s${RESET} [%s]: " "$prompt" "$default" >/dev/tty
     else
-        printf "  ${BOLD}%s${RESET}: " "$prompt"
+        printf "  ${BOLD}%s${RESET}: " "$prompt" >/dev/tty
     fi
     local answer
     read -r answer
