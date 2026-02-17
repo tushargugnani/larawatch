@@ -630,6 +630,36 @@ cmd_uninstall_cron() {
     fi
 }
 
+cmd_self_update() {
+    if [[ ! -d "${LARAWATCH_DIR}/.git" ]]; then
+        out_error "Not a git install — cannot self-update"
+        out_info "Re-install with: bash <(curl -s https://raw.githubusercontent.com/tushargugnani/larawatch/main/install.sh)"
+        return 1
+    fi
+
+    out_info "Checking for updates..."
+
+    local current_head new_head
+    current_head=$(git -C "$LARAWATCH_DIR" rev-parse HEAD 2>/dev/null)
+
+    if ! git -C "$LARAWATCH_DIR" pull --ff-only 2>/dev/null; then
+        out_error "Update failed — you may have local changes"
+        out_info "Try: cd ${LARAWATCH_DIR} && git stash && larawatch self-update"
+        return 1
+    fi
+
+    new_head=$(git -C "$LARAWATCH_DIR" rev-parse HEAD 2>/dev/null)
+
+    if [[ "$current_head" == "$new_head" ]]; then
+        out_ok "Already up to date (v${LARAWATCH_VERSION})"
+    else
+        local new_version
+        new_version=$(grep -oP '^LARAWATCH_VERSION="\K[^"]+' "${LARAWATCH_DIR}/larawatch" 2>/dev/null || echo "unknown")
+        out_ok "Updated to v${new_version}"
+        out_dim "$(git -C "$LARAWATCH_DIR" log --oneline "${current_head}..${new_head}" 2>/dev/null)"
+    fi
+}
+
 cmd_version() {
     echo "LaraWatch v${LARAWATCH_VERSION}"
 }
@@ -650,6 +680,7 @@ Commands:
   remove-site <name-or-path>    Remove a tracked site
   install-cron                  Install cron job (every 5 minutes)
   uninstall-cron                Remove cron job
+  self-update                    Pull latest version from GitHub
   version                       Show version
   help                          Show this help
 
@@ -808,6 +839,7 @@ main() {
         remove-site)    cmd_remove_site "$@" ;;
         install-cron)   cmd_install_cron ;;
         uninstall-cron) cmd_uninstall_cron ;;
+        self-update)    cmd_self_update ;;
         version)        cmd_version ;;
         help|--help|-h) cmd_help ;;
         *)

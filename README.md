@@ -85,6 +85,7 @@ larawatch add-site /path/to/laravel    # Add site manually
 larawatch remove-site mysite.com       # Remove site
 larawatch install-cron                 # Set up cron job
 larawatch uninstall-cron               # Remove cron job
+larawatch self-update  # Pull latest version from GitHub
 larawatch version      # Show version
 larawatch help         # Show usage
 ```
