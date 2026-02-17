@@ -20,6 +20,8 @@ check_cron_run() {
 
     while IFS='|' read -r status entry; do
         [[ -z "$status" ]] && continue
+        # Don't flag our own cron entry
+        [[ "$entry" == *"larawatch"* ]] && continue
         case "$status" in
             ADDED)
                 finding_add "CRITICAL" "cron" "SYSTEM" "New cron entry: ${entry}"
