@@ -6,7 +6,7 @@ echo "=== Setting up LaraWatch test environment ==="
 
 # --- Create a fake Laravel project ---
 SITE_DIR="/home/forge/myapp"
-mkdir -p "${SITE_DIR}"/{app/Http/Controllers,public,routes,resources/views,storage/framework/views,bootstrap/cache,vendor/laravel/framework}
+mkdir -p "${SITE_DIR}"/{app/Http/Controllers,app/Models,public,routes,resources/views,storage/framework/views,bootstrap/cache,vendor/laravel/framework,vendor/composer,database/migrations,database/seeders,database/factories,config}
 
 # artisan file (required for site discovery)
 cat > "${SITE_DIR}/artisan" << 'PHP'
@@ -72,6 +72,29 @@ cat > "${SITE_DIR}/resources/views/welcome.blade.php" << 'PHP'
 <html><body><h1>Welcome</h1></body></html>
 PHP
 
+# vendor/composer/installed.json (for vendor integrity check)
+cat > "${SITE_DIR}/vendor/composer/installed.json" << 'JSON'
+{"packages":[{"name":"laravel/framework","version":"v11.0.0"}]}
+JSON
+
+# Config file
+cat > "${SITE_DIR}/config/app.php" << 'PHP'
+<?php
+return ['name' => 'TestApp', 'env' => 'production'];
+PHP
+
+# Existing migration (part of baseline)
+cat > "${SITE_DIR}/database/migrations/2024_01_01_000000_create_users_table.php" << 'PHP'
+<?php
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+class CreateUsersTable extends Migration {
+    public function up() { Schema::create('users', function (Blueprint $table) { $table->id(); $table->string('name'); }); }
+    public function down() { Schema::dropIfExists('users'); }
+}
+PHP
+
 # --- Nginx config ---
 mkdir -p /etc/nginx/sites-enabled
 cat > /etc/nginx/sites-enabled/myapp.conf << 'NGINX'
@@ -115,6 +138,8 @@ CHECK_PROCESSES="true"
 CHECK_SERVICE_EXPOSURE="true"
 CHECK_USERS="true"
 CHECK_NGINX="true"
+CHECK_SHELL_PROFILES="true"
+CHECK_TMPDIR="true"
 CHECK_LOG_ANOMALIES="true"
 CHECK_DISK="true"
 CHECK_CPU="true"

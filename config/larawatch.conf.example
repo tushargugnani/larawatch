@@ -91,6 +91,16 @@ ENV_PROBE_THRESHOLD=5
 ERROR_RATE_THRESHOLD=10
 
 # ============================================================
+# PHP Integrity Settings
+# ============================================================
+
+# Space-separated relative paths where new PHP files are expected.
+# New files in these paths are content-checked: if clean → INFO, if
+# suspicious (eval, shell_exec, etc.) → CRITICAL. Files outside these
+# paths are always CRITICAL when new.
+PHP_INTEGRITY_SAFE_PATHS="database/migrations database/seeders database/factories"
+
+# ============================================================
 # Webshell Scan Settings
 # ============================================================
 
