@@ -29,10 +29,10 @@ WEBSHELL_PATTERNS=(
     'passthru[[:space:]]*\([[:space:]]*\$'
     # Dangerous functions with dynamic args
     'preg_replace[[:space:]]*\(.*/e[^"]*"?[[:space:]]*,'
-    'create_function[[:space:]]*\('
+    'create_function[[:space:]]*\(.*\$_(POST|GET|REQUEST|COOKIE)\['
     # Obfuscation indicators
     'chr[[:space:]]*\([[:space:]]*[0-9]+[[:space:]]*\)[[:space:]]*\.[[:space:]]*chr[[:space:]]*\([[:space:]]*[0-9]+[[:space:]]*\)'
-    '\\x[0-9a-fA-F]{2}\\x[0-9a-fA-F]{2}\\x[0-9a-fA-F]{2}'
+    '(\\x[0-9a-fA-F]{2}){5,}'
     # File upload to arbitrary paths
     'file_put_contents[[:space:]]*\(.*\$_(POST|GET|REQUEST)\['
     'move_uploaded_file[[:space:]]*\(.*\$_(POST|GET|REQUEST)\['
@@ -63,6 +63,12 @@ check_webshell_run() {
     local combined_pattern
     combined_pattern=$(printf '%s\n' "${WEBSHELL_PATTERNS[@]}" | paste -sd'|')
 
+    # Per-site configurable path exclusions (space-separated relative paths)
+    local exclude_path_args=()
+    for p in ${WEBSHELL_EXCLUDE_PATHS:-}; do
+        exclude_path_args+=(-not -path "*/${p}/*")
+    done
+
     while IFS= read -r file; do
         [[ -z "$file" ]] && continue
         local matches
@@ -79,6 +85,7 @@ check_webshell_run() {
         -not -path "*/storage/framework/views/*" \
         -not -path "*/storage/logs/*" \
         -not -path "*/bootstrap/cache/*" \
+        "${exclude_path_args[@]}" \
         "${find_time_args[@]}" 2>/dev/null)
 
     baseline_set_last_run "webshell_${site_name}"

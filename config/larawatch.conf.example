@@ -91,6 +91,14 @@ ENV_PROBE_THRESHOLD=5
 ERROR_RATE_THRESHOLD=10
 
 # ============================================================
+# Webshell Scan Settings
+# ============================================================
+
+# Space-separated relative paths to exclude from webshell scanning
+# e.g. "public/wiki public/support vendor-custom"
+WEBSHELL_EXCLUDE_PATHS=""
+
+# ============================================================
 # Resource Monitoring Thresholds
 # ============================================================
 
