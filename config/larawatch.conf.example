@@ -68,8 +68,13 @@ EMAIL_SMTP_PASS=""
 # Notification Behavior
 # ============================================================
 
-# Seconds before resending identical (non-CRITICAL) alerts
-NOTIFY_COOLDOWN=3600
+# Each distinct finding is alerted once. Set to a number of seconds to remind
+# again while it is still present (0 = never repeat)
+NOTIFY_REPEAT_AFTER=0
+
+# Seconds after a finding stops appearing before it is forgotten. If it comes
+# back later it counts as new and alerts again
+NOTIFY_FORGET_AFTER=86400
 
 # Minimum severity to trigger notifications: CRITICAL, WARNING, or INFO
 NOTIFY_MIN_SEVERITY="CRITICAL"

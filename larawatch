@@ -583,9 +583,22 @@ cmd_config() {
             --email-smtp-pass)
                 config_set "EMAIL_SMTP_PASS" "$2"
                 shift 2 ;;
+            --repeat-after)
+                config_set "NOTIFY_REPEAT_AFTER" "$2"
+                if [[ "$2" -le 0 ]] 2>/dev/null; then
+                    out_ok "Findings will be alerted once, with no repeats"
+                else
+                    out_ok "Ongoing findings will be repeated every ${2}s"
+                fi
+                shift 2 ;;
+            --forget-after)
+                config_set "NOTIFY_FORGET_AFTER" "$2"
+                out_ok "Findings forgotten ${2}s after they stop appearing"
+                shift 2 ;;
             --cooldown)
-                config_set "NOTIFY_COOLDOWN" "$2"
-                out_ok "Cooldown set to ${2}s"
+                # Legacy flag from the old whole-scan cooldown
+                config_set "NOTIFY_REPEAT_AFTER" "$2"
+                out_ok "Repeat interval set to ${2}s (--cooldown is now --repeat-after)"
                 shift 2 ;;
             --min-severity)
                 config_set "NOTIFY_MIN_SEVERITY" "$2"
@@ -777,7 +790,8 @@ Config options:
   --email-smtp-port PORT        SMTP port (default: 587)
   --email-smtp-user USER        SMTP username
   --email-smtp-pass PASS        SMTP password
-  --cooldown SECONDS            Notification cooldown (default: 3600)
+  --repeat-after SECONDS        Re-alert an ongoing finding (0 = alert once)
+  --forget-after SECONDS        Forget a finding after it stops appearing (default: 86400)
   --min-severity LEVEL          Minimum severity: CRITICAL, WARNING, INFO
   --scan-dirs DIRS              Space-separated directories to scan
   --scan-depth N                Max scan depth (default: 4)

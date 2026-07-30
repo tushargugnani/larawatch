@@ -14,6 +14,7 @@ LARAWATCH_LOGS="${LARAWATCH_DIR}/logs"
 LARAWATCH_LOG="${LARAWATCH_LOGS}/larawatch.log"
 LARAWATCH_LOCK="${LARAWATCH_STATE}/.larawatch.lock"
 LARAWATCH_FINDINGS="${LARAWATCH_STATE}/.findings.tmp"
+LARAWATCH_NOTIFIED="${LARAWATCH_STATE}/.notified"
 
 # Source output helpers
 source "${LARAWATCH_DIR}/lib/output.sh"
@@ -119,6 +120,16 @@ findings_get() {
 
 # --- Notification Dispatch ---
 
+# Build a stable dedup key for a finding. Volatile detail is stripped so that a
+# fluctuating value (cpu %, memory %, PIDs, request counts, the "top: ..." tail)
+# still maps to the same key across scans -- otherwise every scan would look new.
+notify_finding_key() {
+    local severity="$1" check="$2" site="$3" msg="$4"
+    msg="${msg%%—*}"
+    msg="$(printf '%s' "$msg" | sed 's/[0-9][0-9.,:]*/#/g; s/[[:space:]]\{1,\}/ /g; s/^ //; s/ $//')"
+    printf '%s|%s|%s|%s' "$severity" "$check" "$site" "$msg" | sha256sum | awk '{print $1}'
+}
+
 notify_dispatch() {
     local total
     total=$(findings_count)
@@ -126,22 +137,60 @@ notify_dispatch() {
         return 0
     fi
 
-    local critical_count warning_count info_count
-    critical_count=$(findings_count "CRITICAL")
-    warning_count=$(findings_count "WARNING")
-    info_count=$(findings_count "INFO")
-
-    # Check minimum severity
     local min_sev="${NOTIFY_MIN_SEVERITY:-CRITICAL}"
-    case "$min_sev" in
-        CRITICAL)
-            [[ "$critical_count" -eq 0 ]] && return 0
-            ;;
-        WARNING)
-            [[ "$critical_count" -eq 0 ]] && [[ "$warning_count" -eq 0 ]] && return 0
-            ;;
-        INFO) ;; # always send
-    esac
+    # 0 = never repeat while a finding keeps being seen
+    local repeat_after="${NOTIFY_REPEAT_AFTER:-0}"
+    # Forget a finding this long after it stops appearing; it then alerts as new
+    local forget_after="${NOTIFY_FORGET_AFTER:-86400}"
+
+    local now
+    now=$(date +%s)
+
+    # Previously notified findings: key -> first_notified
+    declare -gA notified_at=()
+    if [[ -f "$LARAWATCH_NOTIFIED" ]]; then
+        local k first last
+        while IFS='|' read -r k first last; do
+            [[ -z "$k" ]] && continue
+            (( now - ${last:-0} > forget_after )) && continue
+            notified_at["$k"]="${first:-$last}"
+        done < "$LARAWATCH_NOTIFIED"
+    fi
+
+    # Split the eligible findings into new (notify now) and already-reported
+    local new_lines=() new_keys=() seen_keys=()
+    local critical_count=0 warning_count=0 info_count=0
+    local severity check site msg key
+    while IFS='|' read -r severity check site msg; do
+        [[ -z "$severity" ]] && continue
+        case "$min_sev" in
+            CRITICAL) [[ "$severity" != "CRITICAL" ]] && continue ;;
+            WARNING)  [[ "$severity" == "INFO" ]] && continue ;;
+        esac
+
+        key=$(notify_finding_key "$severity" "$check" "$site" "$msg")
+        seen_keys+=("$key")
+
+        if [[ -n "${notified_at[$key]:-}" ]]; then
+            if [[ "$repeat_after" -le 0 ]] || (( now - notified_at[$key] < repeat_after )); then
+                continue
+            fi
+        fi
+
+        new_lines+=("${severity}|${check}|${site}|${msg}")
+        new_keys+=("$key")
+        case "$severity" in
+            CRITICAL) critical_count=$((critical_count + 1)) ;;
+            WARNING)  warning_count=$((warning_count + 1)) ;;
+            INFO)     info_count=$((info_count + 1)) ;;
+        esac
+    done < "$LARAWATCH_FINDINGS"
+
+    if [[ "${#new_lines[@]}" -eq 0 ]]; then
+        log_info "Notification suppressed: no new findings (${#seen_keys[@]} already reported)"
+        notify_state_write "$now" "$forget_after" "${seen_keys[@]}"
+        return 0
+    fi
 
     # Build message
     local hostname_str ip_str timestamp_str
@@ -158,34 +207,14 @@ notify_dispatch() {
     [[ "$critical_count" -gt 0 ]] && summary_parts+=("CRITICAL x${critical_count}")
     [[ "$warning_count" -gt 0 ]] && summary_parts+=("WARNING x${warning_count}")
     [[ "$info_count" -gt 0 ]] && summary_parts+=("INFO x${info_count}")
-    message+="$(IFS=', '; echo "${summary_parts[*]}")\n\n"
+    message+="New: $(IFS=', '; echo "${summary_parts[*]}")\n\n"
 
-    while IFS='|' read -r severity check site msg; do
-        # Apply min severity filter per finding
-        case "$min_sev" in
-            CRITICAL) [[ "$severity" != "CRITICAL" ]] && continue ;;
-            WARNING)  [[ "$severity" == "INFO" ]] && continue ;;
-        esac
+    local line
+    for line in "${new_lines[@]}"; do
+        IFS='|' read -r severity check site msg <<< "$line"
         message+="[${severity}] ${check} | ${site}\n"
         message+="  ${msg}\n\n"
-    done < "$LARAWATCH_FINDINGS"
-
-    # Check cooldown (hash-based dedup)
-    local findings_hash
-    findings_hash=$(sha256sum "$LARAWATCH_FINDINGS" 2>/dev/null | awk '{print $1}')
-    local cooldown_file="${LARAWATCH_STATE}/.cooldown_${findings_hash}"
-    local cooldown_secs="${NOTIFY_COOLDOWN:-3600}"
-
-    if [[ -f "$cooldown_file" ]] && [[ "$critical_count" -eq 0 ]]; then
-        local last_sent
-        last_sent=$(cat "$cooldown_file" 2>/dev/null)
-        local now
-        now=$(date +%s)
-        if (( now - last_sent < cooldown_secs )); then
-            log_info "Notification suppressed (cooldown). Hash: $findings_hash"
-            return 0
-        fi
-    fi
+    done
 
     # Send via configured channels
     local sent=0
@@ -201,11 +230,59 @@ notify_dispatch() {
     fi
 
     if [[ "$sent" -eq 1 ]]; then
-        date +%s > "$cooldown_file"
+        log_info "Notified ${#new_lines[@]} new finding(s)"
+        # Mark the new keys as notified now; refresh last-seen for the rest
+        local nk
+        for nk in "${new_keys[@]}"; do
+            notified_at["$nk"]="$now"
+        done
+    else
+        log_warn "No notification channel delivered; new findings stay pending"
+    fi
+    notify_state_write "$now" "$forget_after" "${seen_keys[@]}"
+
+    # Drop cooldown files from the pre-0.2 whole-scan dedup scheme
+    find "$LARAWATCH_STATE" -maxdepth 1 -name '.cooldown_*' -delete 2>/dev/null
+}
+
+# notify_state_write <now> <forget_after> <seen keys...>
+# Rewrites the notified-state file from the global `notified_at` map: every key
+# seen this scan gets last_seen=now, keys not seen this scan are carried over
+# until they age past forget_after. Keys seen but never delivered are skipped so
+# they are still treated as new on the next scan.
+notify_state_write() {
+    local now="$1" forget_after="$2"
+    shift 2
+
+    declare -A first_at=()
+    local k
+    for k in "${!notified_at[@]}"; do first_at["$k"]="${notified_at[$k]}"; done
+
+    declare -A is_seen=()
+    for k in "$@"; do is_seen["$k"]=1; done
+
+    declare -A prev_last=()
+    if [[ -f "$LARAWATCH_NOTIFIED" ]]; then
+        local pk pf pl
+        while IFS='|' read -r pk pf pl; do
+            [[ -z "$pk" ]] && continue
+            prev_last["$pk"]="${pl:-0}"
+        done < "$LARAWATCH_NOTIFIED"
     fi
 
-    # Clean old cooldown files (older than 24h)
-    find "$LARAWATCH_STATE" -name '.cooldown_*' -mmin +1440 -delete 2>/dev/null
+    local tmpfile="${LARAWATCH_NOTIFIED}.tmp"
+    : > "$tmpfile"
+    for k in "${!first_at[@]}"; do
+        local last
+        if [[ -n "${is_seen[$k]:-}" ]]; then
+            last="$now"
+        else
+            last="${prev_last[$k]:-0}"
+            (( now - last > forget_after )) && continue
+        fi
+        printf '%s|%s|%s\n' "$k" "${first_at[$k]}" "$last" >> "$tmpfile"
+    done
+    mv "$tmpfile" "$LARAWATCH_NOTIFIED"
 }
 
 # --- Helpers ---
