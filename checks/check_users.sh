@@ -1,7 +1,36 @@
 #!/usr/bin/env bash
 # LaraWatch Check: User Accounts
 # Monitors /etc/passwd, sudo group, /etc/sudoers
-# New user = CRITICAL, New sudo member = CRITICAL
+# New login-shell user = CRITICAL, New sudo member = CRITICAL
+# Service accounts with non-login shells are ignored (see IGNORE_USER_SHELLS)
+
+# Default non-login shells. Matching is exact path or basename, so
+# /usr/sbin/nologin matches /sbin/nologin and vice versa.
+_USERS_DEFAULT_IGNORE_SHELLS="/sbin/nologin /usr/sbin/nologin /bin/false /bin/true /usr/bin/nologin"
+
+# Return 0 if this user ADDED/REMOVED entry should not generate an alert.
+# detail format: username:uid:shell
+_users_should_ignore() {
+    local detail="$1"
+    local username shell
+    username="${detail%%:*}"
+    shell="${detail#*:*:}"
+
+    local ignore_users="${IGNORE_USERS:-}"
+    local u
+    for u in $ignore_users; do
+        [[ "$username" == "$u" ]] && return 0
+    done
+
+    local ignore_shells="${IGNORE_USER_SHELLS:-$_USERS_DEFAULT_IGNORE_SHELLS}"
+    local shell_base="${shell##*/}"
+    local s s_base
+    for s in $ignore_shells; do
+        s_base="${s##*/}"
+        [[ "$shell" == "$s" || ( -n "$shell_base" && "$shell_base" == "$s_base" ) ]] && return 0
+    done
+    return 1
+}
 
 check_users_run() {
     local bdir
@@ -28,6 +57,7 @@ check_users_run() {
             ADDED)
                 case "$type" in
                     user)
+                        _users_should_ignore "$detail" && continue
                         finding_add "CRITICAL" "users" "SYSTEM" "New user account: ${detail}"
                         ;;
                     sudo)
@@ -41,6 +71,7 @@ check_users_run() {
             REMOVED)
                 case "$type" in
                     user)
+                        _users_should_ignore "$detail" && continue
                         finding_add "WARNING" "users" "SYSTEM" "User account removed: ${detail}"
                         ;;
                     sudo)
@@ -60,10 +91,11 @@ check_users_update() {
 }
 
 _users_snapshot() {
-    # List all user accounts (with shell, excluding nologin/false for noise reduction... actually include all for security)
+    # Include every passwd entry so a later shell change (nologin → bash)
+    # still appears as a new login-shell user. Alerts are filtered in check_users_run.
     while IFS=: read -r username _ uid _ _ _ shell; do
         echo "user:${username}:${uid}:${shell}"
-    done < /etc/passwd
+    done < "${USERS_PASSWD_FILE:-/etc/passwd}"
 
     # Sudo group members
     if getent group sudo &>/dev/null; then

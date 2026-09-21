@@ -45,7 +45,7 @@ larawatch test   # verify it works
 | Listening Ports | System | CRITICAL (new port) |
 | Suspicious Processes | System | CRITICAL (miners, reverse shells) |
 | Service Exposure | System | WARNING (Redis/Memcached/MySQL on 0.0.0.0) |
-| User Accounts | System | CRITICAL (new user/sudo member) |
+| User Accounts | System | CRITICAL (new login-shell user/sudo member) |
 | Nginx Config | System | WARNING (modified) |
 | Log Anomalies | System | WARNING (.env probes, 5xx spikes) |
 
@@ -155,7 +155,11 @@ SCAN_DEPTH=4                # Max depth
 CHECK_PHP_INTEGRITY="true"  # Toggle individual checks
 NOTIFY_COOLDOWN=3600        # Alert dedup window (seconds)
 NOTIFY_MIN_SEVERITY="CRITICAL" # CRITICAL, WARNING, or INFO
+IGNORE_USER_SHELLS="/sbin/nologin /usr/sbin/nologin /bin/false /bin/true /usr/bin/nologin"
+IGNORE_USERS=""             # Extra usernames to skip (optional)
 ```
+
+Service accounts whose shell is listed in `IGNORE_USER_SHELLS` (matched by exact path or basename) do not raise ADDED or REMOVED user alerts. New users with a real login shell (`/bin/bash`, `/bin/sh`, …) and new sudo members are still CRITICAL.
 
 ## Requirements
 
