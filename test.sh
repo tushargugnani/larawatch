@@ -148,11 +148,73 @@ PHP
             [[ "$FAIL" -eq 0 ]] && exit 0 || exit 1
         '
         ;;
+    users)
+        echo "Testing users check (ignore nologin / IGNORE_USERS)..."
+        docker run --rm "$IMAGE_NAME" -c '
+            set -uo pipefail
+            PASS=0
+            FAIL=0
+            check() {
+                local description="$1" expected="$2"
+                shift 2
+                local output
+                output=$(larawatch scan 2>&1) || true
+                if echo "$output" | grep -q "$expected"; then
+                    echo "  PASS: ${description}"
+                    PASS=$((PASS + 1))
+                else
+                    echo "  FAIL: ${description}"
+                    echo "    Expected match: ${expected}"
+                    echo "$output" | grep -E "user account|sudo member" || echo "    (no user/sudo findings)"
+                    FAIL=$((FAIL + 1))
+                fi
+            }
+            check_absent() {
+                local description="$1" unexpected="$2"
+                shift 2
+                local output
+                output=$(larawatch scan 2>&1) || true
+                if echo "$output" | grep -q "$unexpected"; then
+                    echo "  FAIL: ${description}"
+                    echo "    Should not match: ${unexpected}"
+                    echo "$output" | grep -E "user account|sudo member" || true
+                    FAIL=$((FAIL + 1))
+                else
+                    echo "  PASS: ${description}"
+                    PASS=$((PASS + 1))
+                fi
+            }
+
+            echo "=== Unit + local integration ==="
+            bash /opt/larawatch/test/test_users.sh
+
+            echo ""
+            echo "=== Live /etc/passwd via larawatch scan ==="
+            echo "/home/forge/myapp|/home/forge/myapp|" > /opt/larawatch/state/sites.list
+            larawatch update > /dev/null 2>&1
+
+            echo "dnsmasq:x:977:977:dnsmasq:/var/lib/misc:/sbin/nologin" >> /etc/passwd
+            check_absent "package nologin user does not CRITICAL" "New user account: dnsmasq"
+
+            echo "hacker:x:2001:2001::/home/hacker:/bin/bash" >> /etc/passwd
+            check "login-shell user is CRITICAL" "CRITICAL.*New user account: hacker"
+
+            usermod -aG sudo nobody 2>/dev/null || true
+            check "new sudo member is CRITICAL" "CRITICAL.*New sudo member: nobody"
+
+            echo ""
+            echo "================================"
+            echo "Live scan: ${PASS} passed, ${FAIL} failed"
+            echo "================================"
+            [[ "$FAIL" -eq 0 ]]
+        '
+        ;;
     *)
-        echo "Usage: ./test.sh [shell|scan|php-integrity]"
+        echo "Usage: ./test.sh [shell|scan|php-integrity|users]"
         echo "  shell          - Interactive shell in test container (default)"
         echo "  scan           - Run init + scan and exit"
         echo "  php-integrity  - Test php_integrity tiered severity classification"
+        echo "  users          - Test user-account ignore rules (nologin / IGNORE_USERS)"
         exit 1
         ;;
 esac

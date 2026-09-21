@@ -154,6 +154,8 @@ CPU_WARN_THRESHOLD=90
 CPU_CRITICAL_THRESHOLD=95
 MEMORY_WARN_THRESHOLD=80
 MEMORY_CRITICAL_THRESHOLD=90
+IGNORE_USER_SHELLS="/sbin/nologin /usr/sbin/nologin /bin/false /bin/true /usr/bin/nologin"
+IGNORE_USERS=""
 CONF
 
 # Symlink to PATH

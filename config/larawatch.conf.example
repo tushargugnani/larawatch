@@ -109,6 +109,20 @@ PHP_INTEGRITY_SAFE_PATHS="database/migrations database/seeders database/factorie
 WEBSHELL_EXCLUDE_PATHS=""
 
 # ============================================================
+# User Account Settings
+# ============================================================
+
+# Space-separated shells treated as non-login. New or removed accounts
+# using these shells do not generate alerts (package service accounts).
+# Matching is by exact path or basename, so /usr/sbin/nologin also
+# matches /sbin/nologin. Sudo membership changes are still reported.
+IGNORE_USER_SHELLS="/sbin/nologin /usr/sbin/nologin /bin/false /bin/true /usr/bin/nologin"
+
+# Space-separated usernames to skip for user ADDED/REMOVED alerts.
+# Sudo membership changes for these users are still reported.
+IGNORE_USERS=""
+
+# ============================================================
 # Resource Monitoring Thresholds
 # ============================================================
 
