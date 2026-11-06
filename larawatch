@@ -194,7 +194,8 @@ cmd_watch() {
         rm -f "$watch_lock"
     fi
     echo $$ > "$watch_lock"
-    trap 'rm -f "$watch_lock"' EXIT
+    # Use absolute path in trap: locals are unbound after the function returns under set -u
+    trap 'rm -f "${LARAWATCH_STATE}/.larawatch.watch.lock"' EXIT
 
     logs_rotate
     findings_init
