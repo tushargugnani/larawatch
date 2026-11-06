@@ -28,6 +28,7 @@ MANUAL_SITES=""
 CHECK_PHP_INTEGRITY="true"      # SHA256 hash all PHP files
 CHECK_ENV_INTEGRITY="true"      # .env file hash and permissions
 CHECK_WEBSHELL="true"           # Scan for webshell patterns
+CHECK_FAST_PHP="true"           # Minute watch: new PHP in storage/public/livewire-tmp
 
 # System-wide checks
 CHECK_SSH_KEYS="true"           # authorized_keys monitoring
@@ -55,6 +56,8 @@ TELEGRAM_CHAT_ID=""
 # ============================================================
 # Notifications - Email
 # ============================================================
+# Prefers SMTP when EMAIL_SMTP_HOST is set; otherwise uses sendmail/Exim
+# or the mail CLI (common on cPanel). No SMTP creds needed for local MTA.
 
 NOTIFY_EMAIL="false"
 EMAIL_TO=""
@@ -112,6 +115,47 @@ PHP_INTEGRITY_SAFE_PATHS="database/migrations database/seeders database/factorie
 # Space-separated relative paths to exclude from webshell scanning
 # e.g. "public/wiki public/support vendor-custom"
 WEBSHELL_EXCLUDE_PATHS=""
+
+# ============================================================
+# Fast PHP Watch (larawatch watch — every minute)
+# ============================================================
+
+# Space-separated site-relative roots to watch for new/changed .php files
+FAST_PHP_PATHS="storage public bootstrap/cache"
+
+# When true, the minute watch also peeks at access logs for Livewire/PHP signals
+WATCH_INCLUDE_LOGS="true"
+
+# ============================================================
+# Temp Dir Scan Settings
+# ============================================================
+
+# Space-separated path globs to skip (agent scratch trees, etc.)
+# Matched with bash [[ path == pattern || path == pattern/* ]]
+TMPDIR_EXCLUDE_PATHS="/tmp/claude-* /var/tmp/claude-* /tmp/cursor-* /var/tmp/cursor-*"
+
+# ============================================================
+# Livewire / Upload Log Settings
+# ============================================================
+
+# CRITICAL when this many livewire+php request lines appear in a scan window
+LIVEWIRE_PHP_UPLOAD_THRESHOLD=1
+
+# WARNING when this many POST /livewire/upload-file hit in one window
+LIVEWIRE_UPLOAD_BURST_THRESHOLD=30
+
+# Space-separated access log paths (auto-detect nginx + cPanel ~/access-logs if empty)
+# NGINX_ACCESS_LOG="/home/user/access-logs/example.com-ssl_log"
+
+# ============================================================
+# Log Rotation
+# ============================================================
+
+# Rotate larawatch.log / cron.log / watch.log above this size (bytes)
+LOG_MAX_BYTES=52428800
+
+# Number of rotated copies to keep
+LOG_KEEP=5
 
 # ============================================================
 # User Account Settings

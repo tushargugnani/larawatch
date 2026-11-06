@@ -47,7 +47,10 @@ larawatch test   # verify it works
 | Service Exposure | System | WARNING (Redis/Memcached/MySQL on 0.0.0.0) |
 | User Accounts | System | CRITICAL (new login-shell user/sudo member) |
 | Nginx Config | System | WARNING (modified) |
-| Log Anomalies | System | WARNING (.env probes, 5xx spikes) |
+| Log Anomalies | System | WARNING (.env probes, 5xx spikes); CRITICAL (Livewire/.php upload signals) |
+| Fast PHP Watch | Per-site | CRITICAL (new PHP in storage/public/livewire-tmp) |
+| Temp Dirs | System | CRITICAL (new PHP in /tmp,/var/tmp,/dev/shm) |
+| Shell Profiles | System | WARNING (startup file changes) |
 
 ## How It Works
 
@@ -74,8 +77,9 @@ On first run (`larawatch init`), LaraWatch captures the known-good state of your
 ```
 larawatch              # Run all checks (same as 'scan')
 larawatch scan         # Run all checks
+larawatch watch        # Fast per-minute path (storage/public/livewire-tmp + log peek)
 larawatch init         # First-time setup (interactive)
-larawatch update       # Refresh all baselines
+larawatch update       # Refresh all baselines (run after every deploy)
 larawatch update --site mysite.com     # Update one site
 larawatch update --check php_integrity # Update one check
 larawatch status       # Dashboard
@@ -83,8 +87,9 @@ larawatch test         # Send test notification
 larawatch config       # Configure settings (see below)
 larawatch add-site /path/to/laravel    # Add site manually
 larawatch remove-site mysite.com       # Remove site
-larawatch install-cron                 # Set up cron job
-larawatch uninstall-cron               # Remove cron job
+larawatch install-cron [minutes]       # Full scan + per-minute watch + nightly log rotate
+larawatch uninstall-cron               # Remove LaraWatch cron jobs
+larawatch rotate-logs [--force]        # Rotate oversized logs
 larawatch self-update  # Pull latest version from GitHub
 larawatch version      # Show version
 larawatch help         # Show usage
@@ -117,15 +122,20 @@ larawatch config \
 larawatch test  # send a test email
 ```
 
-### Email (sendmail)
+### Email (sendmail / Exim / local MTA)
 
-If `sendmail` or `mail` is available, just set the recipient:
+On cPanel and most shared hosts, Exim provides `/usr/sbin/sendmail`. Just set the recipient (and optionally the From address). No SMTP credentials needed:
 
 ```bash
-larawatch config --email-to "you@example.com"
+larawatch config --email-to "you@example.com" --email-from "larawatch@yourdomain.com"
+larawatch test
 ```
 
+Email is a backup channel alongside Telegram — enable both so a Telegram outage cannot hide an alert.
+
 ## After Deployments
+
+Always refresh baselines after a deploy so legitimate new PHP files (migrations, Livewire builds, `artisan optimize` cache) are not treated as intrusions:
 
 For Forge/Envoyer (symlink deploys), add to your deploy script:
 
@@ -136,7 +146,8 @@ larawatch update --site $FORGE_SITE_NAME 2>/dev/null || true
 For git pull / direct deploys:
 
 ```bash
-larawatch update --site mysite.com
+cd ~/public_html && git pull && php artisan optimize
+larawatch update --site public_html   # or your site name from `larawatch status`
 ```
 
 Or update all baselines:
@@ -144,6 +155,16 @@ Or update all baselines:
 ```bash
 larawatch update
 ```
+
+## Instant alerts (`larawatch watch`)
+
+`larawatch install-cron` installs three jobs:
+
+1. **Full scan** — every N minutes (your choice; default hourly if non-interactive)
+2. **Watch** — every minute: new/changed `.php` under `storage/`, `public/`, `bootstrap/cache/` (especially `livewire-tmp`), plus a peek at access logs for Livewire/PHP upload signals
+3. **Log rotate** — nightly; also runs automatically when a log exceeds `LOG_MAX_BYTES` (default 50 MB)
+
+The minute watch uses its own lock so it never blocks the hourly scan.
 
 ## Configuration
 
@@ -153,7 +174,8 @@ All settings in `config/larawatch.conf`. Key options:
 SCAN_DIRS="/home"           # Directories to scan
 SCAN_DEPTH=4                # Max depth
 CHECK_PHP_INTEGRITY="true"  # Toggle individual checks
-NOTIFY_COOLDOWN=3600        # Alert dedup window (seconds)
+NOTIFY_REPEAT_AFTER=0       # Re-alert ongoing findings (0 = once)
+NOTIFY_FORGET_AFTER=86400   # Forget findings this many seconds after they clear
 NOTIFY_MIN_SEVERITY="CRITICAL" # CRITICAL, WARNING, or INFO
 IGNORE_USER_SHELLS="/sbin/nologin /usr/sbin/nologin /bin/false /bin/true /usr/bin/nologin"
 IGNORE_USERS=""             # Extra usernames to skip (optional)

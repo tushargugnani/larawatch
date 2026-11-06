@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # LaraWatch - Core library: logging, config, locking, notification dispatch
 
-LARAWATCH_VERSION="0.1.0"
+LARAWATCH_VERSION="0.2.0"
 
 # Resolve LARAWATCH_DIR to the directory containing the main 'larawatch' script
 if [[ -z "${LARAWATCH_DIR:-}" ]]; then
@@ -301,4 +301,36 @@ get_site_name() {
 
 ensure_dirs() {
     mkdir -p "$LARAWATCH_STATE" "$LARAWATCH_LOGS"
+}
+
+# --- Log rotation ---
+# Rotate larawatch.log / cron.log when they exceed LOG_MAX_BYTES (default 50MB).
+# Keeps LOG_KEEP rotated copies (default 5). Safe to call frequently.
+logs_rotate() {
+    local max_bytes="${LOG_MAX_BYTES:-52428800}"
+    local keep="${LOG_KEEP:-5}"
+    mkdir -p "$LARAWATCH_LOGS"
+
+    local logfile
+    for logfile in "$LARAWATCH_LOG" "${LARAWATCH_LOGS}/cron.log" "${LARAWATCH_LOGS}/watch.log"; do
+        [[ -f "$logfile" ]] || continue
+        local size
+        size=$(wc -c < "$logfile" 2>/dev/null | tr -d ' ')
+        [[ "$size" =~ ^[0-9]+$ ]] || continue
+        (( size < max_bytes )) && continue
+
+        local i
+        for (( i=keep; i>=1; i-- )); do
+            if [[ -f "${logfile}.${i}" ]]; then
+                if (( i == keep )); then
+                    rm -f "${logfile}.${i}"
+                else
+                    mv "${logfile}.${i}" "${logfile}.$((i+1))"
+                fi
+            fi
+        done
+        mv "$logfile" "${logfile}.1"
+        : > "$logfile"
+        log_info "Rotated $(basename "$logfile") (was ${size} bytes)"
+    done
 }

@@ -35,6 +35,7 @@ cmd_scan() {
     lock_acquire || return 1
     trap lock_release EXIT
 
+    logs_rotate
     findings_init
     log_info "Scan started"
 
@@ -174,6 +175,62 @@ cmd_scan() {
 
     # Record last run
     date +%s > "${LARAWATCH_STATE}/.last_scan"
+}
+
+cmd_watch() {
+    config_load || return 1
+    require_init || return 1
+    ensure_dirs
+
+    # Separate lock so watch can run alongside a full scan
+    local watch_lock="${LARAWATCH_STATE}/.larawatch.watch.lock"
+    if [[ -f "$watch_lock" ]]; then
+        local lock_pid
+        lock_pid=$(cat "$watch_lock" 2>/dev/null)
+        if [[ -n "$lock_pid" ]] && kill -0 "$lock_pid" 2>/dev/null; then
+            log_info "Watch skipped: another watch is running (PID $lock_pid)"
+            return 0
+        fi
+        rm -f "$watch_lock"
+    fi
+    echo $$ > "$watch_lock"
+    trap 'rm -f "$watch_lock"' EXIT
+
+    logs_rotate
+    findings_init
+    log_info "Watch started"
+
+    local site_count=0
+
+    if [[ "${CHECK_FAST_PHP:-true}" == "true" ]]; then
+        while IFS='|' read -r path real_path symlink; do
+            [[ -z "$path" ]] && continue
+            local site_name
+            site_name=$(sites_get_name "$path")
+            check_fast_php_run "$path" "$site_name"
+            site_count=$((site_count + 1))
+        done < <(sites_load)
+    fi
+
+    # Peek at access logs for Livewire/PHP upload signals (cheap offset-based)
+    if [[ "${CHECK_LOG_ANOMALIES:-true}" == "true" ]] && [[ "${WATCH_INCLUDE_LOGS:-true}" == "true" ]]; then
+        check_log_anomalies_run
+    fi
+
+    local total
+    total=$(findings_count)
+
+    log_info "Watch completed: ${site_count} sites, ${total} findings"
+
+    if [[ "$total" -gt 0 ]]; then
+        if [[ -t 1 ]]; then
+            out_header "Watch Results"
+            while IFS='|' read -r severity check site message; do
+                out_table_row "$severity" "$check" "$site" "$message"
+            done < <(findings_get)
+        fi
+        notify_dispatch
+    fi
 }
 
 cmd_init() {
@@ -422,6 +479,35 @@ _interactive_setup() {
     out_ok "LaraWatch is ready to protect your server"
 }
 
+cmd_rotate_logs() {
+    ensure_dirs
+    if [[ "${1:-}" == "--force" ]]; then
+        local logfile
+        for logfile in "$LARAWATCH_LOG" "${LARAWATCH_LOGS}/cron.log" "${LARAWATCH_LOGS}/watch.log"; do
+            [[ -f "$logfile" ]] || continue
+            [[ -s "$logfile" ]] || continue
+            local keep="${LOG_KEEP:-5}"
+            local i
+            for (( i=keep; i>=1; i-- )); do
+                if [[ -f "${logfile}.${i}" ]]; then
+                    if (( i == keep )); then
+                        rm -f "${logfile}.${i}"
+                    else
+                        mv "${logfile}.${i}" "${logfile}.$((i+1))"
+                    fi
+                fi
+            done
+            mv "$logfile" "${logfile}.1"
+            : > "$logfile"
+            out_ok "Force-rotated $(basename "$logfile")"
+        done
+    else
+        config_load 2>/dev/null || true
+        logs_rotate
+        out_ok "Log rotation checked (max ${LOG_MAX_BYTES:-52428800} bytes, keep ${LOG_KEEP:-5})"
+    fi
+}
+
 cmd_update() {
     config_load || return 1
     require_init || return 1
@@ -489,6 +575,7 @@ cmd_status() {
         "Nginx Config|CHECK_NGINX"
         "Shell Profiles|CHECK_SHELL_PROFILES"
         "Temp Dirs|CHECK_TMPDIR"
+        "Fast PHP Watch|CHECK_FAST_PHP"
         "Log Anomalies|CHECK_LOG_ANOMALIES"
         "Disk Usage|CHECK_DISK"
         "CPU Usage|CHECK_CPU"
@@ -663,66 +750,91 @@ cmd_remove_site() {
 cmd_install_cron() {
     local larawatch_bin="${LARAWATCH_DIR}/larawatch"
     local minutes="${1:-}"
+    local existing
+    existing=$(crontab -l 2>/dev/null || true)
 
-    # Check if already installed
-    if crontab -l 2>/dev/null | grep -qF "larawatch scan"; then
-        out_warn "LaraWatch cron job already installed"
-        out_info "To change interval: larawatch uninstall-cron && larawatch install-cron [minutes]"
-        return 0
-    fi
-
-    # If no argument, prompt for interval
+    # Prompt for interval only when no scan cron exists and no minutes arg given
     if [[ -z "$minutes" ]]; then
-        echo "How often should LaraWatch scan?"
-        echo "  1) Every 5 minutes (recommended)"
-        echo "  2) Every 15 minutes"
-        echo "  3) Every 30 minutes"
-        echo "  4) Every 60 minutes"
-        echo "  5) Custom interval"
-        while true; do
-            printf "Choose [1-5]: "
-            read -r choice </dev/tty
-            case "${choice}" in
-                1|"") minutes=5; break ;;
-                2) minutes=15; break ;;
-                3) minutes=30; break ;;
-                4) minutes=60; break ;;
-                5)
-                    printf "Enter interval in minutes (1-1440): "
-                    read -r minutes </dev/tty
-                    break
-                    ;;
-                *) out_warn "Invalid choice, please enter 1-5" ;;
-            esac
-        done
+        if printf '%s\n' "$existing" | grep -qF "larawatch scan"; then
+            minutes=""
+        elif [[ -t 0 ]] && [[ -t 1 ]]; then
+            echo "How often should LaraWatch run a full scan?"
+            echo "  1) Every 5 minutes (recommended)"
+            echo "  2) Every 15 minutes"
+            echo "  3) Every 30 minutes"
+            echo "  4) Every 60 minutes"
+            echo "  5) Custom interval"
+            while true; do
+                printf "Choose [1-5]: "
+                read -r choice </dev/tty
+                case "${choice}" in
+                    1|"") minutes=5; break ;;
+                    2) minutes=15; break ;;
+                    3) minutes=30; break ;;
+                    4) minutes=60; break ;;
+                    5)
+                        printf "Enter interval in minutes (1-1440): "
+                        read -r minutes </dev/tty
+                        break
+                        ;;
+                    *) out_warn "Invalid choice, please enter 1-5" ;;
+                esac
+            done
+        else
+            minutes=60
+        fi
     fi
 
-    # Validate
-    if ! [[ "$minutes" =~ ^[0-9]+$ ]] || (( minutes < 1 || minutes > 1440 )); then
-        out_error "Invalid interval: must be 1-1440 minutes"
-        return 1
-    fi
+    # Strip previous LaraWatch entries, then re-add
+    local cleaned
+    cleaned=$(printf '%s\n' "$existing" | grep -vF "larawatch scan" | grep -vF "larawatch watch" | grep -vF "larawatch rotate-logs" || true)
 
-    local cron_schedule
-    if (( minutes < 60 )); then
-        cron_schedule="*/${minutes} * * * *"
-    elif (( minutes == 60 )); then
-        cron_schedule="0 * * * *"
+    local scan_entry=""
+    if [[ -n "$minutes" ]]; then
+        if ! [[ "$minutes" =~ ^[0-9]+$ ]] || (( minutes < 1 || minutes > 1440 )); then
+            out_error "Invalid interval: must be 1-1440 minutes"
+            return 1
+        fi
+        local cron_schedule
+        if (( minutes < 60 )); then
+            cron_schedule="*/${minutes} * * * *"
+        elif (( minutes == 60 )); then
+            cron_schedule="0 * * * *"
+        else
+            local hours=$(( minutes / 60 ))
+            cron_schedule="0 */${hours} * * *"
+        fi
+        scan_entry="${cron_schedule} ${larawatch_bin} scan >> ${LARAWATCH_LOGS}/cron.log 2>&1"
     else
-        local hours=$(( minutes / 60 ))
-        cron_schedule="0 */${hours} * * *"
+        scan_entry=$(printf '%s\n' "$existing" | grep -F "larawatch scan" | head -1 || true)
+        if [[ -z "$scan_entry" ]]; then
+            scan_entry="0 * * * * ${larawatch_bin} scan >> ${LARAWATCH_LOGS}/cron.log 2>&1"
+        fi
     fi
 
-    local cron_entry="${cron_schedule} ${larawatch_bin} scan >> ${LARAWATCH_LOGS}/cron.log 2>&1"
-    (crontab -l 2>/dev/null; echo "$cron_entry") | crontab -
-    out_ok "Cron job installed (every ${minutes} minutes)"
-    out_dim "  ${cron_entry}"
+    local watch_entry="* * * * * ${larawatch_bin} watch >> ${LARAWATCH_LOGS}/watch.log 2>&1"
+    local rotate_entry="15 3 * * * ${larawatch_bin} rotate-logs >> ${LARAWATCH_LOGS}/cron.log 2>&1"
+
+    {
+        printf '%s\n' "$cleaned"
+        echo "$scan_entry"
+        echo "$watch_entry"
+        echo "$rotate_entry"
+    } | awk 'NF' | crontab -
+
+    out_ok "Cron installed: full scan + per-minute watch + nightly log rotate"
+    out_dim "  ${scan_entry}"
+    out_dim "  ${watch_entry}"
+    out_dim "  ${rotate_entry}"
 }
 
 cmd_uninstall_cron() {
-    if crontab -l 2>/dev/null | grep -qF "larawatch scan"; then
-        crontab -l 2>/dev/null | grep -vF "larawatch scan" | crontab -
-        out_ok "LaraWatch cron job removed"
+    local existing cleaned
+    existing=$(crontab -l 2>/dev/null || true)
+    if printf '%s\n' "$existing" | grep -qE 'larawatch (scan|watch|rotate-logs)'; then
+        cleaned=$(printf '%s\n' "$existing" | grep -vF "larawatch scan" | grep -vF "larawatch watch" | grep -vF "larawatch rotate-logs" || true)
+        printf '%s\n' "$cleaned" | crontab -
+        out_ok "LaraWatch cron jobs removed (scan, watch, rotate-logs)"
     else
         out_info "No LaraWatch cron job found"
     fi
@@ -769,6 +881,7 @@ Usage: larawatch <command> [options]
 
 Commands:
   scan                          Run all security checks (default)
+  watch                         Fast per-minute check (storage/public/livewire-tmp PHP + log peek)
   init                          First-time setup: discover sites, create baselines
   update [--site X] [--check Y] Refresh baselines (after deploy/changes)
   status                        Dashboard showing all checks and sites
@@ -776,9 +889,10 @@ Commands:
   config --key value            Configure settings
   add-site /path/to/laravel     Add a site manually
   remove-site <name-or-path>    Remove a tracked site
-  install-cron [minutes]         Install cron job (default: interactive)
-  uninstall-cron                Remove cron job
-  self-update                    Pull latest version from GitHub
+  install-cron [minutes]        Install full-scan + per-minute watch + log rotate crons
+  uninstall-cron                Remove LaraWatch cron jobs
+  rotate-logs [--force]         Rotate larawatch/cron/watch logs if oversized
+  self-update                   Pull latest version from GitHub
   version                       Show version
   help                          Show this help
 
@@ -799,9 +913,13 @@ Config options:
 Examples:
   larawatch init                          # Initial setup
   larawatch scan                          # Run all checks
-  larawatch update --site mysite.com      # Update baselines for one site
+  larawatch watch                         # Fast path (cron every minute)
+  larawatch update --site mysite.com      # Update baselines after deploy
+  larawatch install-cron 60               # Hourly scan + minute watch
   larawatch config --telegram-token X --telegram-chat Y
+  larawatch config --email-to you@example.com --email-from larawatch@example.com
   larawatch test                          # Verify notifications
+  larawatch rotate-logs --force           # Rotate oversized logs now
 HELP
 }
 
@@ -842,6 +960,7 @@ _update_site_baselines() {
     [[ "${CHECK_PHP_INTEGRITY:-true}" == "true" ]] && check_php_integrity_update "$site_dir" "$site_name"
     [[ "${CHECK_ENV_INTEGRITY:-true}" == "true" ]] && check_env_integrity_update "$site_dir" "$site_name"
     [[ "${CHECK_WEBSHELL:-true}" == "true" ]] && check_webshell_update "$site_dir" "$site_name"
+    [[ "${CHECK_FAST_PHP:-true}" == "true" ]] && check_fast_php_update "$site_dir" "$site_name"
 }
 
 _update_site() {
@@ -919,12 +1038,26 @@ _update_check() {
         users)        check_users_update ;;
         nginx)        check_nginx_update ;;
         log_anomalies) check_log_anomalies_update ;;
+        fast_php)
+            if [[ -n "$site" ]]; then
+                local fpath
+                fpath=$(sites_get_path "$site") || { out_error "Site not found: $site"; return 1; }
+                check_fast_php_update "$fpath" "$(sites_get_name "$fpath")"
+            else
+                while IFS='|' read -r path real_path symlink; do
+                    [[ -z "$path" ]] && continue
+                    check_fast_php_update "$path" "$(sites_get_name "$path")"
+                done < <(sites_load)
+            fi
+            ;;
+        tmpdir)       check_tmpdir_update ;;
+        shell_profiles) check_shell_profiles_update ;;
         disk)         check_disk_update ;;
         cpu)          check_cpu_update ;;
         memory)       check_memory_update ;;
         *)
             out_error "Unknown check: ${check}"
-            out_info "Available: php_integrity, env_integrity, webshell, ssh_keys, cron, ports, processes, service_exposure, users, nginx, log_anomalies, disk, cpu, memory"
+            out_info "Available: php_integrity, env_integrity, webshell, fast_php, ssh_keys, cron, ports, processes, service_exposure, users, nginx, tmpdir, shell_profiles, log_anomalies, disk, cpu, memory"
             return 1 ;;
     esac
 }
@@ -937,6 +1070,7 @@ main() {
 
     case "$command" in
         scan)           cmd_scan ;;
+        watch)          cmd_watch ;;
         init)           cmd_init ;;
         update)         cmd_update "$@" ;;
         status)         cmd_status ;;
@@ -946,6 +1080,7 @@ main() {
         remove-site)    cmd_remove_site "$@" ;;
         install-cron)   cmd_install_cron "$@" ;;
         uninstall-cron) cmd_uninstall_cron ;;
+        rotate-logs)    cmd_rotate_logs "$@" ;;
         self-update)    cmd_self_update ;;
         version)        cmd_version ;;
         help|--help|-h) cmd_help ;;

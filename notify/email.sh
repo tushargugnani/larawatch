@@ -85,8 +85,18 @@ ${body}
 MAILEOF
 )
 
-    if echo "$mail_data" | sendmail -t 2>/dev/null; then
-        log_info "Email notification sent to ${to} via sendmail"
+    # Prefer absolute sendmail (Exim/Postfix wrapper on cPanel/WHM)
+    local sendmail_bin
+    sendmail_bin=$(command -v sendmail || true)
+    [[ -x /usr/sbin/sendmail ]] && sendmail_bin="/usr/sbin/sendmail"
+
+    if [[ -z "$sendmail_bin" ]]; then
+        log_error "sendmail binary not found"
+        return 1
+    fi
+
+    if echo "$mail_data" | "$sendmail_bin" -t -f "$from" 2>/dev/null; then
+        log_info "Email notification sent to ${to} via sendmail (${sendmail_bin})"
         return 0
     else
         log_error "Email send via sendmail failed"
