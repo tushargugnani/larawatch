@@ -138,7 +138,7 @@ TMPDIR_EXCLUDE_PATHS="/tmp/claude-* /var/tmp/claude-* /tmp/cursor-* /var/tmp/cur
 # Livewire / Upload Log Settings
 # ============================================================
 
-# CRITICAL when this many livewire+php request lines appear in a scan window
+# CRITICAL when this many Livewire upload-file POSTs or .php requests under livewire/storage appear in a scan window
 LIVEWIRE_PHP_UPLOAD_THRESHOLD=1
 
 # WARNING when this many POST /livewire/upload-file hit in one window

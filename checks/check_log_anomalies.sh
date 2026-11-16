@@ -109,26 +109,31 @@ _log_anomalies_scan_file() {
             fi
 
             # --- Livewire / PHP upload abuse ---
-            # CRITICAL: request line mentions livewire and .php together
-            # (preview-file of a .php upload, or path traversal into livewire-tmp)
+            # CRITICAL: POST to livewire upload-file (v3 /livewire/ or hashed v4
+            # /livewire-xxxx/, including an /index.php/ prefix), or a request whose
+            # path (before the query string) ends in .php under livewire-tmp,
+            # /livewire-xxxx/, /livewire/, or storage/. JS/CSS/map assets,
+            # referrers, and /index.php/ routing prefixes must not match.
+            local livewire_php_re='POST[[:space:]]+[^?[:space:]]*livewire(-[^/[:space:]?]+)?/(upload-file|upload)/?([?[:space:]]|$)|(GET|POST|HEAD)[[:space:]]+[^?[:space:]]*(/livewire-tmp/|/livewire-[^/[:space:]?]+/|/livewire/)[^?[:space:]]*\.php([?[:space:]]|$)|(GET|POST|HEAD)[[:space:]]+[^?[:space:]]*storage/[^?[:space:]]*\.php([?[:space:]]|$)'
             local livewire_php=0
-            livewire_php=$(printf '%s\n' "$new_lines" | grep -ciE 'livewire.*\.php|\.php.*livewire|livewire-tmp.*\.php|storage/app/livewire.*\.php') || livewire_php=0
+            livewire_php=$(printf '%s\n' "$new_lines" | grep -ciE "$livewire_php_re") || livewire_php=0
             if (( livewire_php >= livewire_php_threshold )); then
                 local sample
-                sample=$(printf '%s\n' "$new_lines" | grep -iE 'livewire.*\.php|\.php.*livewire|livewire-tmp.*\.php' | head -3 | tr '\n' ' ' | cut -c1-240)
+                sample=$(printf '%s\n' "$new_lines" | grep -iE "$livewire_php_re" | head -3 | tr '\n' ' ' | cut -c1-240)
                 finding_add "CRITICAL" "log_anomalies" "SYSTEM" "Livewire/PHP upload or access attempts: ${livewire_php} in ${log_label} — ${sample}"
             fi
 
             # CRITICAL: attempts to fetch any .php under storage/ (should never be web-served)
             local storage_php=0
-            storage_php=$(printf '%s\n' "$new_lines" | grep -ciE '(GET|POST|HEAD)[[:space:]]+[^ ]*storage/[^ ]*\.php') || storage_php=0
+            storage_php=$(printf '%s\n' "$new_lines" | grep -ciE '(GET|POST|HEAD)[[:space:]]+[^?[:space:]]*storage/[^?[:space:]]*\.php([?[:space:]]|$)') || storage_php=0
             if (( storage_php > 0 )); then
                 finding_add "CRITICAL" "log_anomalies" "SYSTEM" "Direct .php access under storage/: ${storage_php} requests in ${log_label}"
             fi
 
             # WARNING: burst of Livewire upload-file POSTs from a single IP
             local upload_lines
-            upload_lines=$(printf '%s\n' "$new_lines" | grep -iE 'POST[[:space:]]+[^ ]*livewire/(upload-file|upload)[[:space:]]' || true)
+            local livewire_upload_re='POST[[:space:]]+[^?[:space:]]*livewire(-[^/[:space:]?]+)?/(upload-file|upload)/?([?[:space:]]|$)'
+            upload_lines=$(printf '%s\n' "$new_lines" | grep -iE "$livewire_upload_re" || true)
             if [[ -n "$upload_lines" ]]; then
                 local upload_count
                 upload_count=$(printf '%s\n' "$upload_lines" | wc -l | tr -d ' ')
